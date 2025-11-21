@@ -41,7 +41,7 @@ import {
 import { useAdminPlaces, type Place } from '@/hooks/useAdminPlaces';
 import { useCategories } from '@/hooks/useCategories';
 import { CategoryDropdown } from '@/components/admin/CategoryDropdown';
-import { CategoryFilter }from '@/components/admin/CategoryFilter';
+import { CategoryFilter } from '@/components/admin/CategoryFilter';
 import { 
   Loader2, 
   Plus, 
@@ -55,18 +55,20 @@ import {
   Star,
   BarChart3,
   Upload,
-  X
+  X,
+  Shield
 } from 'lucide-react';
 import { Label } from '@/components/ui/label';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapLocationSelector } from '@/components/admin/MapLocationSelector';
-import { toast } from '@/hooks/use-toast';
 import { ExpandableText } from '@/components/ui/ExpandableText';
 import { FormErrorBoundary } from './FormErrorBoundary';
 import { AdminErrorBoundary } from './AdminErrorBoundary';
+import { useModeracionImagen } from '@/hooks/useModeracionImagen';
+import { useToast } from '@/hooks/use-toast';
+import api from '@/lib/axios';
 
 // Función para construir la URL completa de la imagen
 const buildImageUrl = (imagePath: string | null | undefined): string => {
@@ -249,18 +251,23 @@ interface FileState {
   pdf: File | null;
 }
 
+// ✅ FUNCIÓN PARA PARSEAR ERRORES DE MODERACIÓN
+
 export const AdminPlaces = () => {
   const {
     places,
     loading,
-    error,
     createPlace,
-    updatePlace,
+    updatePlace,           // ✅ ACTUALIZADO: Ahora acepta opciones
+    updatePlaceFast,       // ✅ NUEVO: Para actualizaciones rápidas
+    updatePlaceMetadata,   // ✅ NUEVO: Solo ubicación/categoría
+    validarCambiosLugar,   // ✅ NUEVO: Validación previa
+    analizarCambios,       // ✅ NUEVO: Análisis de cambios
     deletePlace,
-    deletePlaceImage, // ✅ AÑADIDO
-    deletePlacePDF, // ✅ AÑADIDO
+    deletePlaceImage,
+    deletePlacePDF,
     uploadPlaceImage,
-    uploadPlacePDF,
+    uploadPlacePDFConModeracion,
     refetch,
     clearError
   } = useAdminPlaces();
@@ -270,6 +277,19 @@ export const AdminPlaces = () => {
     setSelectedCategory,
     getCategoryColor
   } = useCategories();
+
+  // Hook de moderación de imágenes
+  const { 
+    modelo, 
+    cargando: cargandoModelo, 
+    errorModelo,
+    modeloCargado,
+    inicializarModelo,
+    analizarImagen 
+  } = useModeracionImagen();
+
+  // Hook de toast
+  const { toast } = useToast();
 
   const [galleryManagerOpen, setGalleryManagerOpen] = useState(false);
   const [selectedPlaceForGallery, setSelectedPlaceForGallery] = useState<Place | null>(null);
@@ -291,15 +311,34 @@ export const AdminPlaces = () => {
     pdf: null
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  
+  // ✅ ELIMINADO: Estado para errores de moderación (ya no se muestran en el formulario)
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+
+
+  // ✅ EFECTO PARA MOSTRAR TOASTS DE MODERACIÓN DE IMÁGENES
+  useEffect(() => {
+    if (errorModelo) {
+      toast({
+        title: '⚠️ Filtro de seguridad no disponible',
+        description: 'Las imágenes se subirán sin análisis de contenido inapropiado',
+        variant: 'warning',
+        duration: 6000,
+      });
+    }
+  }, [errorModelo, toast]);
+
   useEffect(() => {
     refetch();
-  }, [refetch]);
+    console.log('🚀 Inicializando modelo...');
+    inicializarModelo();
+  }, [refetch, inicializarModelo]);
 
   const filteredPlaces = places.filter(place => {
     const matchesSearch = (place.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -326,358 +365,684 @@ export const AdminPlaces = () => {
     setFormData(prev => ({ ...prev, location: location.address }));
   };
 
-  const validateForm = (): boolean => {
-    const errors: Record<string, string> = {};
+// ✅ CORREGIDO: Validación mejorada para modo edición
+const validateForm = (): boolean => {
+  const errors: Record<string, string> = {};
+  
+  if (!editingPlace) {
+    // ✅ VALIDACIÓN PARA NUEVO LUGAR (completa)
+    if (!formData.name?.trim()) errors.name = 'El nombre es requerido';
+    if (!formData.description?.trim()) errors.description = 'La descripción es requerida';
+    if (!formData.category) errors.category = 'La categoría es requerida';
+    if (!formData.location?.trim()) errors.location = 'La ubicación es requerida';
+    if (!files.image) errors.image = 'La imagen es requerida para crear un nuevo lugar';
+  } else {
+    // ✅ VALIDACIÓN MEJORADA PARA EDICIÓN - solo validar campos modificados
+    const cambios = analizarCambios(editingPlace, formData);
     
-    if (!editingPlace) {
-      if (!formData.name?.trim()) errors.name = 'El nombre es requerido';
-      if (!formData.description?.trim()) errors.description = 'La descripción es requerida';
-      if (!formData.category) errors.category = 'La categoría es requerida';
-      if (!formData.location?.trim()) errors.location = 'La ubicación es requerida';
-      if (!files.image) errors.image = 'La imagen es requerida para crear un nuevo lugar';
-    } else {
-      const estaModificandoNombre = formData.name && formData.name !== editingPlace.name;
-      const estaModificandoDescripcion = formData.description && formData.description !== editingPlace.description;
-      const estaModificandoCategoria = formData.category && formData.category !== editingPlace.category;
-      const estaModificandoUbicacion = formData.location && formData.location !== editingPlace.location;
-      
-      if (estaModificandoNombre && !formData.name.trim()) {
+    console.log('🔍 Validando en modo edición:', {
+      cambios: cambios.camposModificados,
+      tieneArchivos: !!files.image || !!files.pdf
+    });
+
+    // Solo validar nombre si se está modificando y está vacío
+    if (cambios.nombreModificado) {
+      if (!formData.name?.trim()) {
         errors.name = 'El nombre no puede estar vacío';
       }
-      
-      if (estaModificandoDescripcion && !formData.description.trim()) {
+    }
+    
+    // Solo validar descripción si se está modificando y está vacía
+    if (cambios.descripcionModificada) {
+      if (!formData.description?.trim()) {
         errors.description = 'La descripción no puede estar vacía';
       }
-      
-      if (estaModificandoCategoria && !formData.category) {
+    }
+    
+    // Solo validar categoría si se está modificando y está vacía
+    if (cambios.categoriaModificada) {
+      if (!formData.category) {
         errors.category = 'La categoría es requerida';
       }
-      
-      if (estaModificandoUbicacion && !formData.location.trim()) {
+    }
+    
+    // Solo validar ubicación si se está modificando y está vacía
+    if (cambios.ubicacionModificada) {
+      if (!formData.location?.trim()) {
         errors.location = 'La ubicación no puede estar vacía';
       }
     }
-    
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
 
-  // Función helper para detectar si hay cambios en los datos del formulario
-  const hasFormChanges = useCallback((): boolean => {
-    if (!editingPlace) {
-      // Para nuevo lugar, hay cambios si hay algún dato o archivo
-      return !!(formData.name?.trim() || 
-                formData.description?.trim() || 
-                formData.category || 
-                formData.location?.trim() ||
-                files.image || 
-                files.pdf);
+    // ✅ NUEVO: Validar imagen solo si se está reemplazando
+    if (files.image) {
+      // Validaciones de imagen (tipo, tamaño) pero no requerida
+      if (!files.image.type.startsWith('image/')) {
+        errors.image = 'El archivo debe ser una imagen';
+      } else if (files.image.size > 5 * 1024 * 1024) {
+        errors.image = 'La imagen no debe superar los 5MB';
+      }
     }
-    
-    // Para editar lugar, hay cambios si hay diferencias con el lugar original
-    return (
-      (formData.name && formData.name !== editingPlace.name) ||
-      (formData.description && formData.description !== editingPlace.description) ||
-      (formData.category && formData.category !== editingPlace.category) ||
-      (formData.location && formData.location !== editingPlace.location) ||
-      files.image !== null ||
-      files.pdf !== null
-    );
-  }, [editingPlace, formData, files]);
+  }
+  
+  setFormErrors(errors);
+  
+  console.log('📋 Resultado validación:', {
+    errores: Object.keys(errors),
+    modo: editingPlace ? 'edición' : 'creación'
+  });
+  
+  return Object.keys(errors).length === 0;
+};
 
+// ✅ MEJORADO: Función getFieldError actualizada
+const getFieldError = (field: 'name' | 'description' | 'category' | 'location' | 'image'): string | undefined => {
+  // En modo edición, solo mostrar errores para campos que se están modificando
+  if (editingPlace) {
+    const cambios = analizarCambios(editingPlace, formData);
+    
+    switch (field) {
+      case 'name':
+        if (!cambios.nombreModificado) return undefined;
+        break;
+      case 'description':
+        if (!cambios.descripcionModificada) return undefined;
+        break;
+      case 'category':
+        if (!cambios.categoriaModificada) return undefined;
+        break;
+      case 'location':
+        if (!cambios.ubicacionModificada) return undefined;
+        break;
+      case 'image':
+        // Para imagen, solo validar si se está subiendo una nueva
+        if (!files.image) return undefined;
+        break;
+    }
+  }
+  
+  return formErrors[field];
+};
+
+
+const handleFileChange = async (type: 'image' | 'pdf', file: File | null) => {
+  if (type === 'image' && file) {
+    // Verificar tipo de archivo
+    if (!file.type.startsWith('image/')) {
+      setFormErrors(prev => ({ 
+        ...prev, 
+        image: 'El archivo debe ser una imagen' 
+      }));
+      return;
+    }
+
+    // Verificar tamaño (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setFormErrors(prev => ({ 
+        ...prev, 
+        image: 'La imagen no debe superar los 5MB' 
+      }));
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      
+      // Si el modelo no está inicializado, permitir subir sin análisis
+      if (!modelo && !cargandoModelo) {
+        console.warn('⚠️ Modelo de moderación no disponible');
+        setFiles(prev => ({ ...prev, [type]: file }));
+        setFormErrors(prev => ({ ...prev, [type]: '' }));
+        setIsProcessing(false);
+        return;
+      }
+
+      // Si el modelo está cargando, esperar un momento
+      if (cargandoModelo) {
+        console.log('🔄 Esperando a que cargue el modelo...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+
+      // Analizar imagen con el modelo NSFW
+      const resultado = await analizarImagen(file);
+      
+      if (!resultado.esAprobado) {
+        // ✅ MOSTRAR TOAST EN LUGAR DE ERROR EN FORMULARIO
+        toast({
+          title: '🚫 Imagen rechazada',
+          description: `La imagen contiene contenido inapropiado: ${resultado.razon}`,
+          variant: 'destructive',
+          duration: 6000,
+        });
+        setFormErrors(prev => ({ ...prev, [type]: '' }));
+        setIsProcessing(false);
+        return;
+      }
+
+      // Si la imagen es apropiada, establecer el archivo
+      setFiles(prev => ({ ...prev, [type]: file }));
+      setFormErrors(prev => ({ ...prev, [type]: '' }));
+
+      // ✅ MOSTRAR TOAST DE ÉXITO
+      toast({
+        title: '✅ Imagen aprobada',
+        description: 'La imagen ha pasado el filtro de seguridad',
+        variant: 'default',
+      });
+
+    } catch (error) {
+      console.error('Error analizando imagen:', error);
+      // En caso de error, permitir subir la imagen con advertencia
+      setFiles(prev => ({ ...prev, [type]: file }));
+      setFormErrors(prev => ({ ...prev, [type]: '' }));
+      
+      toast({
+        title: '⚠️ Advertencia de seguridad',
+        description: 'No se pudo analizar la imagen completamente. Se subirá sin verificación.',
+        variant: 'warning',
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  } 
+  // ✅ NUEVO: Manejo de PDFs con preparación para moderación
+  else if (type === 'pdf' && file) {
+    // Verificar tipo de archivo
+    if (file.type !== 'application/pdf') {
+      setFormErrors(prev => ({ 
+        ...prev, 
+        pdf: 'El archivo debe ser un PDF' 
+      }));
+      return;
+    }
+
+    // Verificar tamaño (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      setFormErrors(prev => ({ 
+        ...prev, 
+        pdf: 'El PDF no debe superar los 10MB' 
+      }));
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      
+      // ✅ MOSTRAR ESTADO DE PREPARACIÓN
+      toast({
+        title: '📄 PDF listo para análisis',
+        description: 'El PDF será analizado al guardar los cambios',
+        variant: 'default',
+        duration: 3000,
+      });
+
+      // ✅ ESTABLECER ARCHIVO TEMPORALMENTE
+      // La moderación real se hará al enviar el formulario
+      setFiles(prev => ({ ...prev, [type]: file }));
+      setFormErrors(prev => ({ ...prev, [type]: '' }));
+
+      console.log('✅ PDF preparado para moderación:', file.name);
+      
+    } catch (error) {
+      console.error('Error preparando PDF:', error);
+      setFormErrors(prev => ({ ...prev, [type]: 'Error al preparar el PDF' }));
+      
+      toast({
+        title: '❌ Error con PDF',
+        description: 'No se pudo preparar el PDF para análisis',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  } else {
+    // Cuando se elimina un archivo
+    setFiles(prev => ({ ...prev, [type]: null }));
+    if (file) {
+      setFormErrors(prev => ({ ...prev, [type]: '' }));
+    }
+  }
+};
+
+    /**
+   * ✅ MEJORADO: Detectar cambios de forma inteligente
+   */
+const hasFormChanges = useCallback((): boolean => {
+  if (!editingPlace) {
+    return !!(formData.name?.trim() || 
+              formData.description?.trim() || 
+              formData.category || 
+              formData.location?.trim() ||
+              files.image || 
+              files.pdf);
+  }
+  
+  // ✅ USAR LA FUNCIÓN DEL HOOK PARA ANÁLISIS PRECISO
+  const cambios = analizarCambios(editingPlace, formData);
+  return cambios.camposModificados.length > 0 || !!files.image || !!files.pdf;
+}, [editingPlace, formData, files, analizarCambios]);
+
+
+/**
+ * ✅ CORREGIDO: Manejar envío con manejo correcto de errores de moderación (PDF INTEGRADO EN CREACIÓN)
+ */
 const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
   e.stopPropagation();
   
   if (isSubmitting || isProcessing) {
-    console.log('🛑 Submit ya en proceso, ignorando...');
+    toast({
+      title: '⏳ Operación en curso',
+      description: 'Ya hay una operación en proceso. Por favor espera.',
+      variant: 'warning',
+    });
     return;
   }
 
-  console.log('🎯 [SUBMIT] Iniciando proceso...');
+  console.log('🎯 [SUBMIT] Iniciando proceso inteligente...');
   
   setIsSubmitting(true);
   setIsProcessing(true);
   
   try {
-    // ✅ CASO 1: SOLO SUBIR ARCHIVOS (sin modificar datos del lugar)
-    const soloSubirArchivos = editingPlace && 
-      (!formData.name || formData.name === editingPlace.name) &&
-      (!formData.description || formData.description === editingPlace.description) &&
-      (!formData.category || formData.category === editingPlace.category) &&
-      (!formData.location || formData.location === editingPlace.location);
-
-    if (soloSubirArchivos) {
-      console.log('📤 [SUBMIT] Solo subiendo archivos sin modificar datos del lugar');
-      
-      const uploadResults = {
-        image: { success: false, error: '' },
-        pdf: { success: false, error: '' }
-      };
-
-      // Subir imagen si existe
-      if (files.image) {
-        try {
-          console.log('🖼️ [UPLOAD] Subiendo imagen...');
-          await uploadPlaceImage(editingPlace.id, files.image);
-          uploadResults.image.success = true;
-          console.log('✅ [UPLOAD] Imagen subida correctamente');
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-          uploadResults.image.error = errorMessage;
-          console.error('❌ [UPLOAD] Error subiendo imagen:', errorMessage);
-        }
-      }
-
-      // Subir PDF si existe
-      if (files.pdf) {
-        try {
-          console.log('📄 [UPLOAD] Subiendo PDF...');
-          await uploadPlacePDF(editingPlace.id, files.pdf);
-          uploadResults.pdf.success = true;
-          console.log('✅ [UPLOAD] PDF subido correctamente');
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-          uploadResults.pdf.error = errorMessage;
-          console.error('❌ [UPLOAD] Error subiendo PDF:', errorMessage);
-        }
-      }
-
-      // Manejar resultados
-      const errors = [];
-      if (uploadResults.image.error) errors.push(`Imagen: ${uploadResults.image.error}`);
-      if (uploadResults.pdf.error) errors.push(`PDF: ${uploadResults.pdf.error}`);
-
-      if (errors.length > 0) {
-        toast({ 
-          title: '⚠️ Advertencia', 
-          description: `Archivos procesados con errores: ${errors.join(', ')}`,
-          variant: 'destructive' 
-        });
-      } else if (files.image || files.pdf) {
-        toast({ 
-          title: '✅ Éxito', 
-          description: 'Archivos subidos correctamente' 
-        });
-      } else {
-        toast({ 
-          title: 'ℹ️ Información', 
-          description: 'No se realizaron cambios' 
-        });
-      }
-
-    } 
-    // ✅ CASO 2: CREAR NUEVO LUGAR (con validación completa)
-    else if (!editingPlace) {
+    // ✅ CASO 1: CREAR NUEVO LUGAR (CON PDF INTEGRADO)
+    if (!editingPlace) {
       console.log('🆕 [SUBMIT] Creando nuevo lugar...');
       
       if (!validateForm()) {
         console.log('❌ [VALIDATION] Validación fallida para nuevo lugar');
+        setIsSubmitting(false);
+        setIsProcessing(false);
         return;
       }
 
-      // Para crear nuevo lugar, primero creamos el lugar sin archivos
+      // ✅ PRIMERO: PROCESAR PDF SI EXISTE (ANTES DE CREAR EL LUGAR)
+      let pdfUrlFinal = '';
+      if (files.pdf) {
+        try {
+          console.log('📄 [UPLOAD] Procesando PDF para nuevo lugar...');
+          
+          const formData = new FormData();
+          formData.append('pdf', files.pdf);
+
+          const pdfResponse = await api.post<{ 
+            success: boolean;
+            url_pdf: string;
+            moderacion?: {
+              esAprobado: boolean;
+              puntuacion?: number;
+              metadata?: Record<string, unknown>;
+            };
+          }>('/api/lugares/pdf-temporal', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+            timeout: 45000,
+          });
+
+          if (!pdfResponse.data.success || !pdfResponse.data.moderacion?.esAprobado) {
+            throw new Error('PDF no aprobado por moderación');
+          }
+
+          pdfUrlFinal = pdfResponse.data.url_pdf;
+          console.log('✅ [UPLOAD] PDF aprobado para creación:', pdfUrlFinal);
+
+        } catch (err: any) {
+          console.error('❌ [UPLOAD] PDF rechazado en creación:', err);
+          
+          // ✅ MEJORADO: Capturar detalles específicos del error de moderación
+          if (err.response?.data) {
+            const errorData = err.response.data;
+            console.log('📦 [PDF ERROR] Datos completos del error:', errorData);
+            
+            // ✅ CONSTRUIR MENSAJE DETALLADO DEL RECHAZO
+            const tituloError = '🚫 PDF rechazado';
+            let descripcionError = errorData.message || 'El contenido del PDF no cumple con las políticas';
+            
+            // ✅ AGREGAR DETALLES ESPECÍFICOS SI ESTÁN DISPONIBLES
+            if (errorData.detalles?.problemas && errorData.detalles.problemas.length > 0) {
+              descripcionError += `\n\nProblemas detectados:\n• ${errorData.detalles.problemas.join('\n• ')}`;
+            }
+            
+            if (errorData.detalles?.sugerencias && errorData.detalles.sugerencias.length > 0) {
+              descripcionError += `\n\nSugerencias:\n• ${errorData.detalles.sugerencias.join('\n• ')}`;
+            }
+            
+            if (errorData.detalles?.puntuacion) {
+              descripcionError += `\n\nNivel de riesgo: ${(errorData.detalles.puntuacion * 100).toFixed(1)}%`;
+            }
+
+            // ✅ MOSTRAR TOAST DETALLADO
+            toast({
+              title: tituloError,
+              description: descripcionError,
+              variant: 'destructive',
+              duration: 10000,
+            });
+            
+          } else if (err?.motivo || err?.detalles) {
+            // ✅ ERROR DE MODERACIÓN CON ESTRUCTURA PERSONALIZADA
+            const tituloError = '🚫 PDF rechazado';
+            let descripcionError = err.motivo || err.message || 'El contenido del PDF no cumple con las políticas';
+            
+            if (err.detalles?.problemas && err.detalles.problemas.length > 0) {
+              descripcionError += `\n\nProblemas detectados:\n• ${err.detalles.problemas.join('\n• ')}`;
+            }
+            
+            if (err.detalles?.sugerencias && err.detalles.sugerencias.length > 0) {
+              descripcionError += `\n\nSugerencias:\n• ${err.detalles.sugerencias.join('\n• ')}`;
+            }
+
+            toast({
+              title: tituloError,
+              description: descripcionError,
+              variant: 'destructive',
+              duration: 10000,
+            });
+          } else if (err?.message) {
+            // ✅ ERROR GENÉRICO CON MÁS INFORMACIÓN
+            toast({
+              title: '❌ Error con PDF',
+              description: err.message || 'No se pudo procesar el archivo PDF',
+              variant: 'destructive',
+            });
+          } else {
+            // ✅ ERROR DESCONOCIDO
+            toast({
+              title: '❌ Error con PDF',
+              description: 'No se pudo procesar el archivo PDF',
+              variant: 'destructive',
+            });
+          }
+          
+          // ✅ DETENER LA CREACIÓN SI EL PDF ES RECHAZADO
+          setIsSubmitting(false);
+          setIsProcessing(false);
+          return;
+        }
+      }
+
+      // ✅ CREAR LUGAR CON PDF APROBADO (SI EXISTE)
       const placeData: PlaceFormData = {
         name: formData.name.trim(),
         description: formData.description.trim(),
         category: formData.category,
         location: formData.location.trim(),
+        pdf_url: pdfUrlFinal // ✅ INCLUIR PDF APROBADO EN LA CREACIÓN
       };
 
-      console.log('📤 [CREATE] Creando lugar con datos básicos...');
-      const savedPlace = await createPlace(placeData);
+      console.log('📤 [CREATE] Creando lugar con datos básicos...', {
+        tienePDF: !!pdfUrlFinal,
+        pdfUrl: pdfUrlFinal
+      });
+
+      const savedPlace = await createPlace(placeData, files.image || undefined);
       
       if (!savedPlace?.id) {
         throw new Error('No se pudo obtener el ID del lugar creado');
       }
 
-      console.log('🔄 [UPLOAD] Preparando subida de archivos para nuevo lugar:', savedPlace.id);
+      // ✅ ÉXITO - Mostrar toast solo si todo salió bien
+      const mensajeExito = pdfUrlFinal 
+        ? 'Lugar creado exitosamente con PDF aprobado' 
+        : 'Lugar creado exitosamente';
 
-      // Subir archivos para el nuevo lugar
-      const uploadResults = {
-        image: { success: false, error: '' },
-        pdf: { success: false, error: '' }
-      };
+      toast({
+        title: '✅ Lugar creado',
+        description: mensajeExito,
+      });
 
-      if (files.image) {
-        try {
-          console.log('🖼️ [UPLOAD] Subiendo imagen para nuevo lugar...');
-          await uploadPlaceImage(savedPlace.id, files.image);
-          uploadResults.image.success = true;
-          console.log('✅ [UPLOAD] Imagen subida correctamente');
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-          uploadResults.image.error = errorMessage;
-          console.error('❌ [UPLOAD] Error subiendo imagen:', errorMessage);
-        }
-      }
-
-      if (files.pdf) {
-        try {
-          console.log('📄 [UPLOAD] Subiendo PDF para nuevo lugar...');
-          await uploadPlacePDF(savedPlace.id, files.pdf);
-          uploadResults.pdf.success = true;
-          console.log('✅ [UPLOAD] PDF subido correctamente');
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-          uploadResults.pdf.error = errorMessage;
-          console.error('❌ [UPLOAD] Error subiendo PDF:', errorMessage);
-        }
-      }
-
-      // Manejar resultados
-      const errors = [];
-      if (uploadResults.image.error) errors.push(`Imagen: ${uploadResults.image.error}`);
-      if (uploadResults.pdf.error) errors.push(`PDF: ${uploadResults.pdf.error}`);
-
-      if (errors.length > 0) {
-        toast({ 
-          title: '⚠️ Advertencia', 
-          description: `Lugar creado pero con errores en archivos: ${errors.join(', ')}`,
-          variant: 'destructive' 
-        });
-      } else {
-        const message = files.image || files.pdf 
-          ? 'Lugar creado correctamente con archivos adjuntos'
-          : 'Lugar creado correctamente';
-        
-        toast({ 
-          title: '✅ Éxito', 
-          description: message 
-        });
-      }
-    }
-    // ✅ CASO 3: EDITAR LUGAR (modificando datos)
+    } 
+    // ✅ CASO 2: EDITAR LUGAR EXISTENTE
     else {
       console.log('✏️ [SUBMIT] Editando lugar existente...');
       
-      if (!validateForm()) {
-        console.log('❌ [VALIDATION] Validación fallida para edición');
-        return;
-      }
+      // ✅ ANÁLISIS INTELIGENTE DE CAMBIOS
+      const analisis = analizarCambios(editingPlace, formData);
+      console.log('🔍 Análisis de cambios:', analisis);
 
-      // Para editar, solo enviamos los campos que realmente cambiaron
-      const placeData: Partial<PlaceFormData> = {};
-      
-      if (formData.name && formData.name !== editingPlace.name) {
-        placeData.name = formData.name.trim();
-      }
-      if (formData.description && formData.description !== editingPlace.description) {
-        placeData.description = formData.description.trim();
-      }
-      if (formData.category && formData.category !== editingPlace.category) {
-        placeData.category = formData.category;
-      }
-      if (formData.location && formData.location !== editingPlace.location) {
-        placeData.location = formData.location.trim();
-      }
-
-      // Solo actualizamos si hay cambios en los datos
-      if (Object.keys(placeData).length > 0) {
-        console.log('📤 [UPDATE] Actualizando lugar con datos:', placeData);
-        await updatePlace(editingPlace.id, placeData);
-        console.log('✅ [UPDATE] Lugar actualizado');
-      } else {
-        console.log('ℹ️ [UPDATE] No hay cambios en los datos del lugar');
-      }
-
-      // Subir archivos para el lugar editado
-      const uploadResults = {
-        image: { success: false, error: '' },
-        pdf: { success: false, error: '' }
-      };
-
-      if (files.image) {
-        try {
-          console.log('🖼️ [UPLOAD] Subiendo imagen para lugar editado...');
-          await uploadPlaceImage(editingPlace.id, files.image);
-          uploadResults.image.success = true;
-          console.log('✅ [UPLOAD] Imagen subida correctamente');
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-          uploadResults.image.error = errorMessage;
-          console.error('❌ [UPLOAD] Error subiendo imagen:', errorMessage);
-        }
-      }
-
-      if (files.pdf) {
-        try {
-          console.log('📄 [UPLOAD] Subiendo PDF para lugar editado...');
-          await uploadPlacePDF(editingPlace.id, files.pdf);
-          uploadResults.pdf.success = true;
-          console.log('✅ [UPLOAD] PDF subido correctamente');
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-          uploadResults.pdf.error = errorMessage;
-          console.error('❌ [UPLOAD] Error subiendo PDF:', errorMessage);
-        }
-      }
-
-      // Manejar resultados
-      const errors = [];
-      if (uploadResults.image.error) errors.push(`Imagen: ${uploadResults.image.error}`);
-      if (uploadResults.pdf.error) errors.push(`PDF: ${uploadResults.pdf.error}`);
-
-      if (errors.length > 0) {
-        toast({ 
-          title: '⚠️ Advertencia', 
-          description: `Lugar actualizado pero con errores en archivos: ${errors.join(', ')}`,
-          variant: 'destructive' 
-        });
-      } else {
-        const hasDataChanges = Object.keys(placeData).length > 0;
-        const hasFileChanges = files.image || files.pdf;
+      // ✅ ESTRATEGIA 1: SOLO SUBIR ARCHIVOS (sin cambios en datos)
+      if (analisis.camposModificados.length === 0 && (files.image || files.pdf)) {
+        console.log('📤 [STRATEGY] Solo subiendo archivos...');
         
-        if (hasDataChanges && hasFileChanges) {
-          toast({ 
-            title: '✅ Éxito', 
-            description: 'Lugar actualizado correctamente con archivos adjuntos' 
-          });
-        } else if (hasDataChanges) {
-          toast({ 
-            title: '✅ Éxito', 
-            description: 'Lugar actualizado correctamente' 
-          });
-        } else if (hasFileChanges) {
-          toast({ 
-            title: '✅ Éxito', 
-            description: 'Archivos subidos correctamente' 
+        const uploadPromises = [];
+        
+        if (files.image) {
+          uploadPromises.push(uploadPlaceImage(editingPlace.id, files.image));
+        }
+        
+        if (files.pdf) {
+          uploadPromises.push(
+            uploadPlacePDFConModeracion(editingPlace.id, files.pdf)
+              .catch(err => {
+                console.log('❌ [SUBMIT] PDF rechazado en proceso:', err);
+                // El toast ya se mostró en la función de moderación
+                throw err; // Re-lanzar para que Promise.allSettled detecte el rechazo
+              })
+          );
+        }
+        
+        // ✅ IMPORTANTE: Usar allSettled y verificar resultados
+        const resultados = await Promise.allSettled(uploadPromises);
+        
+        // Verificar si algún archivo fue rechazado
+        const archivosRechazados = resultados.filter(result => 
+          result.status === 'rejected'
+        );
+        
+        if (archivosRechazados.length === 0) {
+          toast({
+            title: '✅ Archivos actualizados',
+            description: 'Los archivos se han actualizado correctamente',
           });
         } else {
-          toast({ 
-            title: 'ℹ️ Información', 
-            description: 'No se realizaron cambios' 
+          console.log('⚠️ Algunos archivos fueron rechazados:', archivosRechazados);
+          // No mostrar toast de éxito aquí, los errores ya se mostraron individualmente
+        }
+      }
+      // ✅ ESTRATEGIA 2: SOLO METADATOS (ubicación/categoría)
+      else if (!analisis.requiereModeracion && analisis.camposModificados.length > 0) {
+        console.log('📝 [STRATEGY] Actualizando solo metadatos...');
+        
+        const datosActualizacion: Partial<PlaceFormData> = {};
+        if (analisis.ubicacionModificada) datosActualizacion.location = formData.location;
+        if (analisis.categoriaModificada) datosActualizacion.category = formData.category;
+        
+        // ✅ ACTUALIZAR METADATOS
+        await updatePlaceMetadata(editingPlace.id, {
+          location: datosActualizacion.location,
+          category: datosActualizacion.category
+        });
+
+        // ✅ SUBIR ARCHIVOS EN PARALELO SI EXISTEN (manejar individualmente)
+        const uploadPromises = [];
+        if (files.image) {
+          uploadPromises.push(uploadPlaceImage(editingPlace.id, files.image));
+        }
+        if (files.pdf) {
+          // ✅ USAR MODERACIÓN PARA PDFs
+          uploadPromises.push(uploadPlacePDFConModeracion(editingPlace.id, files.pdf));
+        }
+        
+        if (uploadPromises.length > 0) {
+          const resultados = await Promise.allSettled(uploadPromises);
+          const archivosRechazados = resultados.filter(result => 
+            result.status === 'rejected'
+          );
+          
+          // Solo mostrar éxito si no hay archivos rechazados
+          if (archivosRechazados.length === 0) {
+            toast({
+              title: '✅ Lugar actualizado',
+              description: 'La información se ha actualizado correctamente',
+            });
+          }
+        } else {
+          // Si no hay archivos, mostrar éxito de la actualización
+          toast({
+            title: '✅ Lugar actualizado',
+            description: 'La información se ha actualizado correctamente',
+          });
+        }
+      }
+      // ✅ ESTRATEGIA 3: CAMBIOS EN TEXTO (requiere moderación)
+      else if (analisis.requiereModeracion) {
+        console.log('🔍 [STRATEGY] Cambios en texto - aplicando moderación...');
+        
+        // ✅ VALIDACIÓN PREVIA OPCIONAL
+        try {
+          const validacion = await validarCambiosLugar(editingPlace.id, formData);
+          
+          if (!validacion.esAprobado) {
+            console.log('❌ [VALIDATION] Validación previa fallida:', validacion.motivo);
+            
+            toast({
+              title: '🚫 Contenido rechazado',
+              description: validacion.motivo || 'El contenido no cumple con las políticas de moderación',
+              variant: 'destructive',
+              duration: 10000,
+            });
+            
+            setIsSubmitting(false);
+            setIsProcessing(false);
+            return;
+          }
+        } catch (err: any) {
+          console.log('⚠️ Validación previa fallida, continuando...', err);
+          
+          // Si es error de moderación, detener el proceso
+          if (err?.motivo || err?.detalles) {
+            // El toast ya se mostró en el hook, solo detener
+            setIsSubmitting(false);
+            setIsProcessing(false);
+            return;
+          }
+        }
+
+        // ✅ ACTUALIZACIÓN CON MODERACIÓN
+        const datosActualizacion: Partial<PlaceFormData> = {};
+        if (analisis.nombreModificado) datosActualizacion.name = formData.name;
+        if (analisis.descripcionModificada) datosActualizacion.description = formData.description;
+        if (analisis.ubicacionModificada) datosActualizacion.location = formData.location;
+        if (analisis.categoriaModificada) datosActualizacion.category = formData.category;
+
+        // ✅ ACTUALIZAR DATOS PRIMERO
+        await updatePlace(editingPlace.id, datosActualizacion, {
+          validarPreviamente: false // Ya validamos arriba
+        });
+
+        // ✅ SUBIR ARCHIVOS EN PARALELO (manejar individualmente)
+        const uploadPromises = [];
+        if (files.image) {
+          uploadPromises.push(uploadPlaceImage(editingPlace.id, files.image));
+        }
+        if (files.pdf) {
+          // ✅ USAR MODERACIÓN PARA PDFs
+          uploadPromises.push(uploadPlacePDFConModeracion(editingPlace.id, files.pdf));
+        }
+        
+        if (uploadPromises.length > 0) {
+          const resultados = await Promise.allSettled(uploadPromises);
+          const archivosRechazados = resultados.filter(result => 
+            result.status === 'rejected'
+          );
+          
+          // Solo mostrar éxito si no hay archivos rechazados
+          if (archivosRechazados.length === 0) {
+            toast({
+              title: '✅ Lugar actualizado',
+              description: 'El lugar se ha actualizado exitosamente',
+            });
+          }
+        } else {
+          // Si no hay archivos, mostrar éxito de la actualización
+          toast({
+            title: '✅ Lugar actualizado',
+            description: 'El lugar se ha actualizado exitosamente',
+          });
+        }
+      }
+      // ✅ ESTRATEGIA 4: ACTUALIZACIÓN RÁPIDA (sin validación)
+      else {
+        console.log('⚡ [STRATEGY] Actualización rápida...');
+        
+        const datosActualizacion: Partial<PlaceFormData> = {};
+        if (analisis.nombreModificado) datosActualizacion.name = formData.name;
+        if (analisis.descripcionModificada) datosActualizacion.description = formData.description;
+        if (analisis.ubicacionModificada) datosActualizacion.location = formData.location;
+        if (analisis.categoriaModificada) datosActualizacion.category = formData.category;
+
+        // ✅ ACTUALIZAR DATOS
+        await updatePlaceFast(editingPlace.id, datosActualizacion);
+
+        // ✅ SUBIR ARCHIVOS (manejar individualmente)
+        const uploadPromises = [];
+        if (files.image) {
+          uploadPromises.push(uploadPlaceImage(editingPlace.id, files.image));
+        }
+        if (files.pdf) {
+          // ✅ USAR MODERACIÓN PARA PDFs
+          uploadPromises.push(uploadPlacePDFConModeracion(editingPlace.id, files.pdf));
+        }
+        
+        if (uploadPromises.length > 0) {
+          const resultados = await Promise.allSettled(uploadPromises);
+          const archivosRechazados = resultados.filter(result => 
+            result.status === 'rejected'
+          );
+          
+          // Solo mostrar éxito si no hay archivos rechazados
+          if (archivosRechazados.length === 0) {
+            toast({
+              title: '✅ Lugar actualizado',
+              description: 'Los cambios se han guardado correctamente',
+            });
+          }
+        } else {
+          // Si no hay archivos, mostrar éxito de la actualización
+          toast({
+            title: '✅ Lugar actualizado',
+            description: 'Los cambios se han guardado correctamente',
           });
         }
       }
     }
 
-    console.log('🏁 [COMPLETED] Proceso terminado, cerrando...');
-    await new Promise(resolve => setTimeout(resolve, 500));
+    console.log('🏁 [COMPLETED] Proceso terminado exitosamente');
     
+    // ✅ LIMPIEZA Y CIERRE (solo si no hubo errores de moderación)
+    await new Promise(resolve => setTimeout(resolve, 500));
     setIsDialogOpen(false);
     resetForm();
-    
     await refetch();
-    console.log('🔄 [REFETCH] Lista actualizada');
 
-  } catch (err) {
-    console.error('❌ [ERROR] Error crítico:', err);
-    const errorMessage = err instanceof Error ? err.message : 'Error desconocido';
-    
-    toast({
-      title: '❌ Error',
-      description: errorMessage,
-      variant: 'destructive',
+  } catch (err: any) {
+    console.error('❌ [ERROR DETALLADO] Error en handleSubmit:', {
+      error: err,
+      message: err?.message,
+      motivo: err?.motivo,
+      detalles: err?.detalles,
+      tipo: err?.tipo,
+      stack: err?.stack
     });
+    
+    // ✅ CORREGIDO: Solo mostrar toast si NO es un error de moderación
+    // Los errores de moderación ya se mostraron en los hooks individuales
+    if (!err?.motivo && !err?.detalles) {
+      console.log('⚠️ ES ERROR GENÉRICO - Mostrando toast...');
+      const errorMessage = err?.message || 'Error al procesar la solicitud';
+      toast({
+        title: '❌ Error',
+        description: errorMessage,
+        variant: 'destructive',
+      });
+    } else {
+      console.log('🎯 ES ERROR DE MODERACIÓN - Toast ya mostrado en hook');
+    }
   } finally {
     setIsSubmitting(false);
     setIsProcessing(false);
   }
-  
-  return false;
 };
-
   const handleEdit = (place: Place) => {
     setEditingPlace(place);
     setFormData({
@@ -692,47 +1057,42 @@ const handleSubmit = async (e: React.FormEvent) => {
     setIsDialogOpen(true);
   };
 
-  // En AdminPlaces.tsx - agrega estas funciones
+  /**
+   * ✅ MEJORADO: Manejar eliminación de imagen
+   */
+  const handleDeleteImage = async () => {
+    if (!editingPlace || !editingPlace.image_url) {
+      toast({
+        title: 'ℹ️ Información',
+        description: 'No hay imagen para eliminar',
+        variant: 'default',
+      });
+      return;
+    }
 
-const handleDeleteImage = async () => {
-  if (!editingPlace || !editingPlace.image_url) {
-    toast({
-      title: 'ℹ️ Información',
-      description: 'No hay imagen para eliminar',
-    });
-    return;
-  }
+    try {
+      console.log('🗑️ Eliminando imagen del lugar:', editingPlace.id);
+      await deletePlaceImage(editingPlace.id);
+      
+      // Actualizar el estado local
+      setFormData(prev => ({ ...prev, image_url: '' }));
+      await refetch();
+      
+    } catch (err) {
+      console.error('❌ Error eliminando imagen:', err);
+      // Error manejado automáticamente por el hook
+    }
+  };
 
-  try {
-    console.log('🗑️ Eliminando imagen del lugar:', editingPlace.id);
-    await deletePlaceImage(editingPlace.id);
-    
-    // Actualizar el estado local
-    setFormData(prev => ({ ...prev, image_url: '' }));
-    
-    toast({
-      title: '✅ Éxito',
-      description: 'Imagen eliminada correctamente',
-    });
-    
-    await refetch();
-  } catch (err) {
-    console.error('❌ Error eliminando imagen:', err);
-    const errorMessage = err instanceof Error ? err.message : 'Error al eliminar la imagen';
-    
-    toast({
-      title: '❌ Error',
-      description: errorMessage,
-      variant: 'destructive',
-    });
-  }
-};
-
+/**
+ * ✅ CORREGIDO: Manejar eliminación de PDF con error usado
+ */
 const handleDeletePDF = async () => {
   if (!editingPlace || !editingPlace.pdf_url) {
     toast({
       title: 'ℹ️ Información',
       description: 'No hay PDF para eliminar',
+      variant: 'default',
     });
     return;
   }
@@ -743,22 +1103,11 @@ const handleDeletePDF = async () => {
     
     // Actualizar el estado local
     setFormData(prev => ({ ...prev, pdf_url: '' }));
-    
-    toast({
-      title: '✅ Éxito',
-      description: 'PDF eliminado correctamente',
-    });
-    
     await refetch();
-  } catch (err) {
-    console.error('❌ Error eliminando PDF:', err);
-    const errorMessage = err instanceof Error ? err.message : 'Error al eliminar el PDF';
     
-    toast({
-      title: '❌ Error',
-      description: errorMessage,
-      variant: 'destructive',
-    });
+  } catch (error) { // ← Cambiado de 'err' a 'error' para ser consistente
+    console.error('❌ Error eliminando PDF:', error);
+    // Error manejado automáticamente por el hook
   }
 };
 
@@ -787,13 +1136,7 @@ const handleDeletePDF = async () => {
 
     } catch (err) {
       console.error('❌ [DELETE] Error eliminando lugar:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Error al eliminar el lugar';
-      
-      toast({
-        title: '❌ Error',
-        description: errorMessage,
-        variant: 'destructive',
-      });
+      // ✅ ELIMINADO: Toast de error - ahora se maneja desde el hook
     } finally {
       setIsDeleting(false);
     }
@@ -811,7 +1154,7 @@ const handleDeletePDF = async () => {
 
   const handleGalleryUpdate = () => {
     refetch();
-    toast({ title: '✅ Galería actualizada', description: 'Los cambios en la galería se han guardado correctamente' });
+    // ✅ ELIMINADO: Toast de éxito - ahora se maneja desde GalleryManager
   };
 
   const openDeleteDialog = (place: Place) => {
@@ -829,17 +1172,19 @@ const handleDeletePDF = async () => {
 
   const handleRefresh = async () => {
     await refetch();
-  };
-
-  const handleFileChange = (type: 'image' | 'pdf', file: File | null) => {
-    setFiles(prev => ({ ...prev, [type]: file }));
-    if (file) {
-      setFormErrors(prev => ({ ...prev, [type]: '' }));
-    }
+    toast({
+      title: '🔄 Lista actualizada',
+      description: 'Los lugares se han actualizado correctamente',
+    });
   };
 
   const removeFile = (type: 'image' | 'pdf') => {
     setFiles(prev => ({ ...prev, [type]: null }));
+    toast({
+      title: '🗑️ Archivo removido',
+      description: `El ${type === 'image' ? 'imagen' : 'PDF'} ha sido removido`,
+      variant: 'default',
+    });
   };
 
   // Skeletons
@@ -943,16 +1288,21 @@ const handleDeletePDF = async () => {
                             value={formData.name}
                             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                             placeholder="Ej: Mirador de la Sierra"
-                            className="border-gray-300 focus:border-blue-500 focus:ring-blue-500 text-black bg-white"
+                            className={cn(
+                              "border-gray-300 focus:border-blue-500 focus:ring-blue-500 text-black bg-white",
+                              getFieldError('name') && "border-red-500 focus:border-red-500"
+                            )}
                           />
-                          {formErrors.name && <p className="text-sm text-red-400">{formErrors.name}</p>}
+                          {getFieldError('name') && (
+                            <p className="text-sm text-red-400">{getFieldError('name')}</p>
+                          )}
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="category" className="text-white font-medium">Categoría *</Label>
                           <CategoryDropdown
                             value={formData.category}
                             onValueChange={(value) => setFormData({ ...formData, category: value })}
-                            error={formErrors.category}
+                            error={getFieldError('category')}
                             placeholder="Selecciona una categoría"
                             categories={categories}
                           />
@@ -967,7 +1317,10 @@ const handleDeletePDF = async () => {
                               value={formData.location}
                               onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                               placeholder="Ej: Centro de San Juan Tahitic"
-                              className="flex-1 border-gray-300 focus:border-blue-500 focus:ring-blue-500 text-black bg-white"
+                              className={cn(
+                                "flex-1 border-gray-300 focus:border-blue-500 focus:ring-blue-500 text-black bg-white",
+                                getFieldError('location') && "border-red-500 focus:border-red-500"
+                              )}
                             />
                             <MapLocationSelector
                               onLocationSelect={handleLocationSelect}
@@ -976,7 +1329,9 @@ const handleDeletePDF = async () => {
                               className="w-auto px-4 border-gray-300 hover:border-blue-500"
                             />
                           </div>
-                          {formErrors.location && <p className="text-sm text-red-400">{formErrors.location}</p>}
+                          {getFieldError('location') && (
+                            <p className="text-sm text-red-400">{getFieldError('location')}</p>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -999,10 +1354,16 @@ const handleDeletePDF = async () => {
                         }}
                         placeholder="Describe el lugar, sus características, atractivos, historia, servicios disponibles, horarios, recomendaciones..."
                         rows={6}
-                        className="min-h-[150px] max-h-[300px] resize-y border-gray-300 focus:border-blue-500 focus:ring-blue-500 text-black bg-white"
+                        className={cn(
+                          "min-h-[150px] max-h-[300px] resize-y border-gray-300 focus:border-blue-500 focus:ring-blue-500 text-black bg-white",
+                          getFieldError('description') && "border-red-500 focus:border-red-500"
+                        )}
                       />
-                      {formErrors.description && <p className="text-sm text-red-400">{formErrors.description}</p>}
-                      {formData.description && (
+                      {getFieldError('description') && (
+                        <p className="text-sm text-red-400">{getFieldError('description')}</p>
+                      )}
+                      
+                      {formData.description && !getFieldError('description') && (
                         <div className="mt-4 p-4 bg-gray-800 rounded-lg border border-gray-700">
                           <h4 className="text-sm font-medium text-white mb-2">Vista previa:</h4>
                           <ExpandableText 
@@ -1014,200 +1375,229 @@ const handleDeletePDF = async () => {
                       )}
                     </div>
 
-{/* Archivos */}
-<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-  {/* Input de Imagen */}
-  <div className="space-y-2">
-    <Label htmlFor="image_file" className="text-white">
-      Imagen {!editingPlace && '*'}
-    </Label>
-    <div className="space-y-2">
-      {files.image ? (
-        <div className="flex items-center justify-between p-3 border-2 border-blue-300/50 rounded-lg bg-blue-500/10 backdrop-blur-sm">
-          <div className="flex items-center gap-3">
-            <img 
-              src={URL.createObjectURL(files.image)} 
-              alt="Vista previa" 
-              className="w-12 h-12 object-cover rounded-lg border-2 border-blue-200/50"
-            />
-            <span className="text-sm font-medium text-blue-100 truncate max-w-[120px]">
-              {files.image.name}
-            </span>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => removeFile('image')}
-            className="text-blue-200 hover:text-white hover:bg-blue-400/30"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      ) : editingPlace?.image_url ? (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between p-3 border-2 border-green-300/50 rounded-lg bg-green-500/10 backdrop-blur-sm">
-            <div className="flex items-center gap-3">
-              <img 
-                src={buildImageUrl(editingPlace.image_url)} 
-                alt="Imagen actual" 
-                className="w-12 h-12 object-cover rounded-lg border-2 border-green-200/50"
-              />
-              <span className="text-sm font-medium text-green-100">Imagen actual</span>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => imageInputRef.current?.click()}
-                className="border-blue-300 text-blue-100 hover:bg-blue-400/30 hover:text-white"
-              >
-                Cambiar
-              </Button>
-            </div>
-          </div>
-          {/* ✅ BOTÓN PARA ELIMINAR IMAGEN */}
-          <Button
-          title='Eliminar Imagen'
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={handleDeleteImage}
-            className="w-full bg-red-600 hover:bg-red-700 text-white border-red-600"
-          >
-            <Trash2 className="h-3 w-3 mr-2" />
-            Eliminar Imagen
-          </Button>
-        </div>
-      ) : (
-        <div 
-          className="border-2 border-dashed border-blue-300/50 rounded-lg p-6 text-center cursor-pointer bg-blue-500/10 hover:bg-blue-500/20 transition-all duration-300 backdrop-blur-sm group"
-          onClick={() => imageInputRef.current?.click()}
-        >
-          <Upload className="h-10 w-10 mx-auto text-blue-300 mb-3 group-hover:text-blue-200 transition-colors" />
-          <p className="text-sm font-medium text-blue-100 mb-2">
-            Haz clic para seleccionar una imagen
-          </p>
-          <p className="text-xs text-blue-200/80 mb-3">
-            PNG, JPG, WEBP (max. 5MB)
-          </p>
-          <Button 
-            type="button" 
-            variant="outline" 
-            size="sm" 
-            className="border-blue-300 text-blue-100 hover:bg-blue-400/30 hover:text-white hover:border-blue-200"
-          >
-            <Upload className="h-3 w-3 mr-2" />
-            Seleccionar Imagen
-          </Button>
-        </div>
-      )}
-      
-      <Input
-        ref={imageInputRef}
-        id="image_file"
-        type="file"
-        accept="image/*"
-        onChange={(e) => handleFileChange('image', e.target.files?.[0] || null)}
-        className="hidden"
-      />
-      
-      {formErrors.image && (
-        <p className="text-sm text-red-400 font-medium">{formErrors.image}</p>
-      )}
-    </div>
-  </div>
+                    {/* Archivos */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Input de Imagen */}
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="image_file" className="text-white">
+                            Imagen {!editingPlace && '*'}
+                          </Label>
+                          {cargandoModelo && (
+                            <Badge variant="outline" className="text-yellow-400 border-yellow-400 text-xs">
+                              <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              Cargando filtro de seguridad...
+                            </Badge>
+                          )}
+                          {modelo && (
+                            <Badge variant="outline" className="text-green-400 border-green-400 text-xs">
+                              <Shield className="h-3 w-3 mr-1" />
+                              {modeloCargado === 'inception_v3' && 'Filtro Avanzado (Inception)'}
+                              {modeloCargado === 'mobilenet_v2' && 'Filtro Seguro (MobileNet)'}
+                              {modeloCargado === 'mobilenet_v2_mid' && 'Filtro Equilibrado (MobileNet Mid)'}
+                            </Badge>
+                          )}
+                          {errorModelo && (
+                            <Badge variant="outline" className="text-red-400 border-red-400 text-xs">
+                              <Shield className="h-3 w-3 mr-1" />
+                              Filtro no disponible
+                            </Badge>
+                          )}
+                        </div>
+                        
+                        {/* Información adicional sobre el filtro */}
+                        <div className="text-xs text-blue-200/80 space-y-1">
+                          <p>• Todas las imágenes pasan por un filtro de contenido inapropiado</p>
+                          <p>• Se rechazan imágenes con contenido explícito o sugerente</p>
+                          <p>• Máximo 5MB por imagen</p>
+                        </div>
+                        <div className="space-y-2">
+                          {files.image ? (
+                            <div className="flex items-center justify-between p-3 border-2 border-blue-300/50 rounded-lg bg-blue-500/10 backdrop-blur-sm">
+                              <div className="flex items-center gap-3">
+                                <img 
+                                  src={URL.createObjectURL(files.image)} 
+                                  alt="Vista previa" 
+                                  className="w-12 h-12 object-cover rounded-lg border-2 border-blue-200/50"
+                                />
+                                <span className="text-sm font-medium text-blue-100 truncate max-w-[120px]">
+                                  {files.image.name}
+                                </span>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => removeFile('image')}
+                                className="text-blue-200 hover:text-white hover:bg-blue-400/30"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ) : editingPlace?.image_url ? (
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center justify-between p-3 border-2 border-green-300/50 rounded-lg bg-green-500/10 backdrop-blur-sm">
+                                <div className="flex items-center gap-3">
+                                  <img 
+                                    src={buildImageUrl(editingPlace.image_url)} 
+                                    alt="Imagen actual" 
+                                    className="w-12 h-12 object-cover rounded-lg border-2 border-green-200/50"
+                                  />
+                                  <span className="text-sm font-medium text-green-100">Imagen actual</span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => imageInputRef.current?.click()}
+                                    className="border-blue-300 text-blue-100 hover:bg-blue-400/30 hover:text-white"
+                                  >
+                                    Cambiar
+                                  </Button>
+                                </div>
+                              </div>
+                              {/* ✅ BOTÓN PARA ELIMINAR IMAGEN */}
+                              <Button
+                              title='Eliminar Imagen'
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                onClick={handleDeleteImage}
+                                className="w-full bg-red-600 hover:bg-red-700 text-white border-red-600"
+                              >
+                                <Trash2 className="h-3 w-3 mr-2" />
+                                Eliminar Imagen
+                              </Button>
+                            </div>
+                          ) : (
+                            <div 
+                              className="border-2 border-dashed border-blue-300/50 rounded-lg p-6 text-center cursor-pointer bg-blue-500/10 hover:bg-blue-500/20 transition-all duration-300 backdrop-blur-sm group"
+                              onClick={() => imageInputRef.current?.click()}
+                            >
+                              <Upload className="h-10 w-10 mx-auto text-blue-300 mb-3 group-hover:text-blue-200 transition-colors" />
+                              <p className="text-sm font-medium text-blue-100 mb-2">
+                                Haz clic para seleccionar una imagen
+                              </p>
+                              <p className="text-xs text-blue-200/80 mb-3">
+                                PNG, JPG, WEBP (max. 5MB)
+                              </p>
+                              <Button 
+                                type="button" 
+                                variant="outline" 
+                                size="sm" 
+                                className="border-blue-300 text-blue-100 hover:bg-blue-400/30 hover:text-white hover:border-blue-200"
+                              >
+                                <Upload className="h-3 w-3 mr-2" />
+                                Seleccionar Imagen
+                              </Button>
+                            </div>
+                          )}
+                          
+                          <Input
+                            ref={imageInputRef}
+                            id="image_file"
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => handleFileChange('image', e.target.files?.[0] || null)}
+                            className="hidden"
+                          />
+                          
+                          {getFieldError('image') && (
+                            <p className="text-sm text-red-400 font-medium">{getFieldError('image')}</p>
+                          )}
+                        </div>
+                      </div>
 
-  {/* Input de PDF */}
-  <div className="space-y-2">
-    <Label htmlFor="pdf_file" className="text-white">Documento PDF</Label>
-    <div className="space-y-2">
-      {files.pdf ? (
-        <div className="flex items-center justify-between p-3 border-2 border-indigo-300/50 rounded-lg bg-indigo-500/10 backdrop-blur-sm">
-          <div className="flex items-center gap-3">
-            <FileText className="h-12 w-12 text-indigo-300" />
-            <span className="text-sm font-medium text-indigo-100 truncate max-w-[120px]">
-              {files.pdf.name}
-            </span>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => removeFile('pdf')}
-            className="text-indigo-200 hover:text-white hover:bg-indigo-400/30"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      ) : editingPlace?.pdf_url ? (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between p-3 border-2 border-green-300/50 rounded-lg bg-green-500/10 backdrop-blur-sm">
-            <div className="flex items-center gap-3">
-              <FileText className="h-12 w-12 text-green-300" />
-              <span className="text-sm font-medium text-green-100">PDF actual</span>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => pdfInputRef.current?.click()}
-                className="border-indigo-300 text-indigo-100 hover:bg-indigo-400/30 hover:text-white"
-              >
-                Cambiar
-              </Button>
-            </div>
-          </div>
-          {/* ✅ BOTÓN PARA ELIMINAR PDF */}
-          <Button
-          title='Eliminar PDF'
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={handleDeletePDF}
-            className="w-full bg-red-600 hover:bg-red-700 text-white border-red-600"
-          >
-            <Trash2 className="h-3 w-3 mr-2" />
-            Eliminar PDF
-          </Button>
-        </div>
-      ) : (
-        <div 
-          className="border-2 border-dashed border-indigo-300/50 rounded-lg p-6 text-center cursor-pointer bg-indigo-500/10 hover:bg-indigo-500/20 transition-all duration-300 backdrop-blur-sm group"
-          onClick={() => pdfInputRef.current?.click()}
-        >
-          <FileText className="h-10 w-10 mx-auto text-indigo-300 mb-3 group-hover:text-indigo-200 transition-colors" />
-          <p className="text-sm font-medium text-indigo-100 mb-2">
-            Haz clic para seleccionar un PDF
-          </p>
-          <p className="text-xs text-indigo-200/80 mb-3">
-            Archivo PDF (max. 10MB)
-          </p>
-          <Button 
-            type="button" 
-            variant="outline" 
-            size="sm" 
-            className="border-indigo-300 text-indigo-100 hover:bg-indigo-400/30 hover:text-white hover:border-indigo-200"
-          >
-            <FileText className="h-3 w-3 mr-2" />
-            Seleccionar PDF
-          </Button>
-        </div>
-      )}
-      
-      <Input
-        ref={pdfInputRef}
-        id="pdf_file"
-        type="file"
-        accept="application/pdf"
-        onChange={(e) => handleFileChange('pdf', e.target.files?.[0] || null)}
-        className="hidden"
-      />
-    </div>
-  </div>
-</div>
+                      {/* Input de PDF */}
+                      <div className="space-y-2">
+                        <Label htmlFor="pdf_file" className="text-white">Documento PDF</Label>
+                        <div className="space-y-2">
+                          {files.pdf ? (
+                            <div className="flex items-center justify-between p-3 border-2 border-indigo-300/50 rounded-lg bg-indigo-500/10 backdrop-blur-sm">
+                              <div className="flex items-center gap-3">
+                                <FileText className="h-12 w-12 text-indigo-300" />
+                                <span className="text-sm font-medium text-indigo-100 truncate max-w-[120px]">
+                                  {files.pdf.name}
+                                </span>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => removeFile('pdf')}
+                                className="text-indigo-200 hover:text-white hover:bg-indigo-400/30"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ) : editingPlace?.pdf_url ? (
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center justify-between p-3 border-2 border-green-300/50 rounded-lg bg-green-500/10 backdrop-blur-sm">
+                                <div className="flex items-center gap-3">
+                                  <FileText className="h-12 w-12 text-green-300" />
+                                  <span className="text-sm font-medium text-green-100">PDF actual</span>
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => pdfInputRef.current?.click()}
+                                    className="border-indigo-300 text-indigo-100 hover:bg-indigo-400/30 hover:text-white"
+                                  >
+                                    Cambiar
+                                  </Button>
+                                </div>
+                              </div>
+                              {/* ✅ BOTÓN PARA ELIMINAR PDF */}
+                              <Button
+                              title='Eliminar PDF'
+                                type="button"
+                                variant="destructive"
+                                size="sm"
+                                onClick={handleDeletePDF}
+                                className="w-full bg-red-600 hover:bg-red-700 text-white border-red-600"
+                              >
+                                <Trash2 className="h-3 w-3 mr-2" />
+                                Eliminar PDF
+                              </Button>
+                            </div>
+                          ) : (
+                            <div 
+                              className="border-2 border-dashed border-indigo-300/50 rounded-lg p-6 text-center cursor-pointer bg-indigo-500/10 hover:bg-indigo-500/20 transition-all duration-300 backdrop-blur-sm group"
+                              onClick={() => pdfInputRef.current?.click()}
+                            >
+                              <FileText className="h-10 w-10 mx-auto text-indigo-300 mb-3 group-hover:text-indigo-200 transition-colors" />
+                              <p className="text-sm font-medium text-indigo-100 mb-2">
+                                Haz clic para seleccionar un PDF
+                              </p>
+                              <p className="text-xs text-indigo-200/80 mb-3">
+                                Archivo PDF (max. 10MB)
+                              </p>
+                              <Button 
+                                type="button" 
+                                variant="outline" 
+                                size="sm" 
+                                className="border-indigo-300 text-indigo-100 hover:bg-indigo-400/30 hover:text-white hover:border-indigo-200"
+                              >
+                                <FileText className="h-3 w-3 mr-2" />
+                                Seleccionar PDF
+                              </Button>
+                            </div>
+                          )}
+                          
+                          <Input
+                            ref={pdfInputRef}
+                            id="pdf_file"
+                            type="file"
+                            accept="application/pdf"
+                            onChange={(e) => handleFileChange('pdf', e.target.files?.[0] || null)}
+                            className="hidden"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Footer del formulario */}
@@ -1217,28 +1607,34 @@ const handleDeletePDF = async () => {
                         type="button"
                         variant="outline"
                         onClick={() => handleDialogOpenChange(false)}
-                        disabled={isSubmitting}
+                        disabled={isSubmitting || isProcessing}
                         className="bg-red-700 text-white hover:bg-red-600 border-red-600"
                       >
                         Cancelar
                       </Button>
-                      <Button 
-                      title='Guardar Lugar'
-                        type="submit"
-                        disabled={isSubmitting || (editingPlace && !hasFormChanges())}
-                        className="bg-blue-600 text-white hover:bg-blue-700 min-w-24 border-blue-600"
-                      >
-                        {isSubmitting ? (
-                          <>
-                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                            {editingPlace ? 'Actualizando...' : 'Creando...'}
-                          </>
-                        ) : editingPlace ? (
-                          hasFormChanges() ? 'Actualizar' : 'Sin cambios'
-                        ) : (
-                          'Crear'
-                        )}
-                      </Button>
+
+<Button 
+  title='Guardar Lugar'
+  type="submit"
+  disabled={Boolean(isSubmitting || isProcessing || (editingPlace && !hasFormChanges()))}
+  className="bg-blue-600 text-white hover:bg-blue-700 min-w-24 border-blue-600"
+>
+  {isProcessing ? (
+    <>
+      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+      {files.image ? 'Analizando seguridad...' : 'Procesando...'}
+    </>
+  ) : isSubmitting ? (
+    <>
+      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+      {editingPlace ? 'Actualizando...' : 'Creando...'}
+    </>
+  ) : editingPlace ? (
+    hasFormChanges() ? 'Guardar Cambios' : 'Sin cambios'
+  ) : (
+    'Crear Lugar'
+  )}
+</Button>
                     </div>
                   </div>
                 </form>
@@ -1248,7 +1644,6 @@ const handleDeletePDF = async () => {
         </div>
       </motion.div>
 
-      {/* Resto del componente permanece igual... */}
       {/* Filtros */}
       <Card className="border border-gray-200 shadow-lg bg-white">
         <CardContent className="p-6">
@@ -1301,19 +1696,7 @@ const handleDeletePDF = async () => {
         </CardContent>
       </Card>
 
-      {/* Error */}
-      {error && (
-        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
-          <Alert variant="destructive" className="mb-4 border-red-200 bg-red-50">
-            <AlertDescription className="flex justify-between items-center">
-              <span className="text-red-800">{error}</span>
-              <Button variant="ghost" size="sm" onClick={clearError} className="text-red-800 hover:bg-red-100">
-                ×
-              </Button>
-            </AlertDescription>
-          </Alert>
-        </motion.div>
-      )}
+      {/* ✅ ELIMINADO: Sección de Alert de error global - Los errores se muestran en toasts */}
 
       {/* Contenido principal con scroll */}
       <div className="flex-1 min-h-0 overflow-hidden">

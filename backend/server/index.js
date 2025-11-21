@@ -1,3 +1,4 @@
+// backend/server/index.js
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";

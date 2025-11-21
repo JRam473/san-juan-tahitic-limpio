@@ -1,4 +1,4 @@
-// components/ExperienceMural.tsx
+// components/ExperienceMural.tsx (VERSIÓN ACTUALIZADA CON NOMBRE DE USUARIO)
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -6,8 +6,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { 
   Plus, 
-  Heart, 
-  MessageCircle, 
   Eye, 
   Calendar, 
   MapPin, 
@@ -15,18 +13,180 @@ import {
   X, 
   Camera,
   Users,
-  CheckCircle,
-  Clock,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Edit,
+  Trash2,
+  MoreVertical,
+  RefreshCw,
+  Shield,
+  Loader2,
+  User,
+  UserCheck,
+  UserX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useExperiences } from '@/hooks/useExperiences';
+import { useExperiences, type Experience } from '@/hooks/useExperiences';
 import { usePlaces } from '@/hooks/usePlaces';
 import { useToast } from '@/hooks/use-toast';
 import { TermsAndConditionsDialog } from '@/components/TermsAndConditionsDialog';
-import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
+import { ExperienceImageModal } from '@/components/galeria/ExperienceImageModal';
+import { useModeracionImagen } from '@/hooks/useModeracionImagen';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+
+// Componente Badge
+const Badge = ({ 
+  variant = 'default', 
+  className = '', 
+  children 
+}: { 
+  variant?: 'default' | 'outline' | 'secondary' | 'destructive';
+  className?: string;
+  children: React.ReactNode;
+}) => {
+  const baseStyles = "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium";
+  const variants = {
+    default: "bg-blue-100 text-blue-800",
+    outline: "border bg-transparent",
+    secondary: "bg-gray-100 text-gray-800",
+    destructive: "bg-red-100 text-red-800"
+  };
+
+  return (
+    <span className={`${baseStyles} ${variants[variant]} ${className}`}>
+      {children}
+    </span>
+  );
+};
+
+// Componente para mostrar el nombre de usuario
+const UserNameDisplay = ({ 
+  nombreUsuario,
+  className = ''
+}: {
+  nombreUsuario: string;
+  className?: string;
+}) => {
+  const displayName = nombreUsuario?.trim() || 'Usuario Anónimo';
+  const isAnonymous = !nombreUsuario?.trim();
+  
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      {isAnonymous ? (
+        <UserX className="w-4 h-4 text-gray-500" />
+      ) : (
+        <UserCheck className="w-4 h-4 text-green-600" />
+      )}
+      <span className={`text-sm font-medium ${
+        isAnonymous ? 'text-gray-500' : 'text-gray-700'
+      }`}>
+        {displayName}
+      </span>
+    </div>
+  );
+};
+
+// Componente para el estado del modelo de moderación
+const ModeloModeracionStatus = ({ 
+  modelo, 
+  cargando, 
+  errorModelo 
+}: { 
+  modelo: boolean; 
+  cargando: boolean; 
+  errorModelo: string | null;
+}) => {
+  if (cargando) {
+    return (
+      <Badge variant="outline" className="text-yellow-400 border-yellow-400 text-xs">
+        <Loader2 className="h-3 w-3 animate-spin mr-1" />
+        Cargando modelo...
+      </Badge>
+    );
+  }
+
+  if (modelo) {
+    return (
+      <Badge variant="outline" className="text-green-400 border-green-400 text-xs">
+        <Shield className="h-3 w-3 mr-1" />
+        Moderación activa
+      </Badge>
+    );
+  }
+
+  if (errorModelo) {
+    return (
+      <Badge variant="outline" className="text-red-400 border-red-400 text-xs">
+        <Shield className="h-3 w-3 mr-1" />
+        Error en modelo
+      </Badge>
+    );
+  }
+
+  return null;
+};
+
+// Componente para el botón "Ver más"
+const LoadMoreButton = ({ 
+  loading, 
+  hasMore, 
+  onClick 
+}: { 
+  loading: boolean; 
+  hasMore: boolean; 
+  onClick: () => void;
+}) => {
+  if (!hasMore) return null;
+
+  return (
+    <div className="flex justify-center mt-8">
+      <Button
+        onClick={onClick}
+        disabled={loading}
+        variant="outline"
+        className="px-8 py-3 border-blue-600 text-blue-600 hover:bg-blue-50"
+      >
+        {loading ? (
+          <>
+            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+            Cargando...
+          </>
+        ) : (
+          'Ver más experiencias'
+        )}
+      </Button>
+    </div>
+  );
+};
+
+// Componente para el indicador de actualización automática
+const AutoRefreshIndicator = ({ 
+  enabled, 
+  onToggle 
+}: { 
+  enabled: boolean; 
+  onToggle: (enabled: boolean) => void;
+}) => {
+  return (
+    <div className="flex items-center gap-2 text-sm text-gray-600 mb-4">
+      <div className={`w-2 h-2 rounded-full ${enabled ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+      <span>Actualización automática: {enabled ? 'Activada' : 'Desactivada'}</span>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => onToggle(!enabled)}
+        className="h-6 px-2 text-xs"
+      >
+        {enabled ? 'Desactivar' : 'Activar'}
+      </Button>
+    </div>
+  );
+};
 
 // Componente de esqueleto para experiencias
 const ExperienceSkeletonGrid = ({ count }: { count: number }) => (
@@ -115,54 +275,88 @@ const ExperienceInvitationBanner = () => {
   );
 };
 
-export const ExperienceMural = () => {
-  const { 
-    experiences, 
-    loading, 
-    uploading, 
-    uploadExperience, 
-    fetchExperiences,
-    incrementViewCount
-  } = useExperiences();
-  
-  const { places } = usePlaces();
+// Componente para mostrar estadísticas del usuario
+const UserStatsBanner = ({ myExperiences }: { myExperiences: Experience[] }) => {
+  if (myExperiences.length === 0) return null;
+
+  const totalVistas = myExperiences.reduce((sum, exp) => sum + exp.contador_vistas, 0);
+  const promedioVistas = myExperiences.length > 0 ? Math.round(totalVistas / myExperiences.length) : 0;
+  const experienciasConNombre = myExperiences.filter(exp => exp.nombre_usuario?.trim()).length;
+  const porcentajeConNombre = myExperiences.length > 0 ? Math.round((experienciasConNombre / myExperiences.length) * 100) : 0;
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className="bg-gradient-to-r from-blue-50 to-green-50 rounded-xl p-4 mb-6 border border-blue-200"
+    >
+      <h4 className="text-lg font-semibold text-gray-800 mb-3">Mis Estadísticas</h4>
+      <div className="flex flex-wrap gap-4 justify-center md:justify-start">
+        <div className="text-center">
+          <div className="text-2xl font-bold text-blue-600">{myExperiences.length}</div>
+          <div className="text-sm text-gray-600">Experiencias</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-purple-600">{totalVistas}</div>
+          <div className="text-sm text-gray-600">Total Vistas</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-green-600">{promedioVistas}</div>
+          <div className="text-sm text-gray-600">Vistas/Promedio</div>
+        </div>
+        <div className="text-center">
+          <div className="text-2xl font-bold text-indigo-600">{porcentajeConNombre}%</div>
+          <div className="text-sm text-gray-600">Con Nombre</div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// Modal de edición ACTUALIZADO con nombre de usuario
+const ExperienceEditModal = ({ 
+  experience, 
+  isOpen, 
+  onClose, 
+  onSave,
+  onSaveWithImage,
+  loading,
+  modelo,
+  cargandoModelo,
+  errorModelo,
+  analizarImagen
+}: {
+  experience: Experience | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (descripcion: string, nombreUsuario?: string) => void;
+  onSaveWithImage: (descripcion: string, imageFile: File | null, nombreUsuario?: string) => void;
+  loading: boolean;
+  modelo: boolean;
+  cargandoModelo: boolean;
+  errorModelo: string | null;
+  analizarImagen: (file: File) => Promise<any>;
+}) => {
+  const [descripcion, setDescripcion] = useState('');
+  const [nombreUsuario, setNombreUsuario] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const { toast } = useToast();
 
-  const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [selectedExperience, setSelectedExperience] = useState<any>(null);
-  const [showTermsDialog, setShowTermsDialog] = useState(false);
-  const [pendingExperience, setPendingExperience] = useState<{
-    imageFile: File;
-    descripcion: string;
-    lugarId?: string;
-  } | null>(null);
-
-  const [uploadData, setUploadData] = useState({
-    descripcion: '',
-    lugarId: '',
-    imageFile: null as File | null,
-    previewUrl: '' as string | null
-  });
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const dropRef = useRef<HTMLDivElement>(null);
-
-  // Cargar experiencias al iniciar
   useEffect(() => {
-    fetchExperiences();
-  }, [fetchExperiences]);
+    if (experience) {
+      setDescripcion(experience.descripcion);
+      setNombreUsuario(experience.nombre_usuario || '');
+      setPreviewUrl(null);
+      setSelectedFile(null);
+      setIsProcessingImage(false);
+    }
+  }, [experience]);
 
-  const resetUploadForm = () => {
-    setUploadData({
-      descripcion: '',
-      lugarId: '',
-      imageFile: null,
-      previewUrl: null
-    });
-    setIsUploadOpen(false);
-  };
-
-  const handleFileSelect = (file: File) => {
+  const handleFileSelect = async (file: File) => {
     if (!file.type.startsWith('image/')) {
       toast({
         title: 'Tipo de archivo inválido',
@@ -181,11 +375,375 @@ export const ExperienceMural = () => {
       return;
     }
 
-    setUploadData(prev => ({
-      ...prev,
-      imageFile: file,
-      previewUrl: URL.createObjectURL(file)
-    }));
+    try {
+      setIsProcessingImage(true);
+      
+      const resultado = await analizarImagen(file);
+      
+      if (!resultado.esAprobado) {
+        toast({
+          title: '❌ Imagen rechazada',
+          description: resultado.razon || 'La imagen no cumple con los criterios de contenido apropiado.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      toast({
+        title: '✅ Imagen aprobada',
+        description: `La imagen ha pasado el filtro de moderación`,
+        variant: 'default',
+      });
+
+      setSelectedFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+
+    } catch (error) {
+      console.error('Error analizando imagen:', error);
+      toast({
+        title: '⚠️ Advertencia',
+        description: 'No se pudo analizar la imagen. Se usará sin verificación.',
+        variant: 'default',
+      });
+      
+      setSelectedFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    } finally {
+      setIsProcessingImage(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleFileSelect(file);
+  };
+
+  const removeFile = () => {
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleSave = () => {
+    if (selectedFile) {
+      onSaveWithImage(descripcion, selectedFile, nombreUsuario);
+    } else {
+      onSave(descripcion, nombreUsuario);
+    }
+  };
+
+  if (!experience) return null;
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl bg-slate-900/95 backdrop-blur-sm border border-slate-700 shadow-xl text-white">
+        <DialogHeader>
+          <DialogTitle>Editar Experiencia</DialogTitle>
+          <DialogDescription className="text-gray-300">
+            Modifica la descripción, nombre de usuario o cambia la imagen de tu experiencia
+          </DialogDescription>
+        </DialogHeader>
+        
+        <div className="space-y-4">
+          {/* Campo de nombre de usuario */}
+          <div>
+            <label className="block text-sm font-medium text-white mb-2">
+              Tu nombre (opcional)
+            </label>
+            <div className="flex items-center gap-2">
+              <User className="w-4 h-4 text-gray-400" />
+              <Input
+                placeholder="Cómo quieres que te llamen (máx. 50 caracteres)"
+                value={nombreUsuario}
+                onChange={(e) => setNombreUsuario(e.target.value)}
+                maxLength={50}
+                className="bg-white/10 border-white/20 text-white placeholder-gray-400"
+              />
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              💡 Si dejas este campo vacío, se mostrará como "Usuario Anónimo"
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <label className="block text-sm font-medium text-white">
+                Imagen de la experiencia
+              </label>
+              <ModeloModeracionStatus 
+                modelo={!!modelo}
+                cargando={cargandoModelo}
+                errorModelo={errorModelo}
+              />
+            </div>
+            
+            <div className="flex gap-4 items-start">
+              <div className="flex-1">
+                <p className="text-sm text-gray-300 mb-2">Imagen actual:</p>
+                <img
+                  src={experience.url_foto}
+                  alt="Experiencia actual"
+                  className="w-32 h-32 object-cover rounded-lg border border-gray-600"
+                />
+              </div>
+              
+              <div className="flex-1">
+                <p className="text-sm text-gray-300 mb-2">Nueva imagen (opcional):</p>
+                
+                {isProcessingImage ? (
+                  <div className="w-32 h-32 border-2 border-dashed border-yellow-400 rounded-lg flex flex-col items-center justify-center bg-yellow-400/10">
+                    <Loader2 className="w-6 h-6 text-yellow-400 animate-spin mb-2" />
+                    <p className="text-xs text-yellow-400 text-center">Analizando imagen...</p>
+                  </div>
+                ) : previewUrl ? (
+                  <div className="relative">
+                    <img
+                      src={previewUrl}
+                      alt="Nueva imagen"
+                      className="w-32 h-32 object-cover rounded-lg border border-blue-400"
+                    />
+                    <button
+                      onClick={removeFile}
+                      className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-32 h-32 border-2 border-dashed border-gray-600 rounded-lg flex items-center justify-center cursor-pointer hover:border-gray-500 transition-colors"
+                  >
+                    <UploadCloud className="w-6 h-6 text-gray-400" />
+                  </div>
+                )}
+                
+                <Input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  disabled={isProcessingImage}
+                />
+                
+                {selectedFile && (
+                  <p className="text-xs text-gray-400 mt-2">
+                    {selectedFile.name}
+                  </p>
+                )}
+              </div>
+            </div>
+            
+            <p className="text-xs text-gray-500">
+              💡 Al cambiar la imagen, la nueva será analizada por moderación automática
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-white mb-2">
+              Descripción *
+            </label>
+            <Textarea
+              placeholder="Describe tu experiencia..."
+              value={descripcion}
+              onChange={(e) => setDescripcion(e.target.value)}
+              rows={4}
+              className="bg-white/10 border-white/20 text-white placeholder-gray-400"
+            />
+          </div>
+
+          <div className="bg-gray-800/50 rounded-lg p-3">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-gray-400">Publicado el</p>
+                <p className="text-white">
+                  {new Date(experience.creado_en).toLocaleDateString('es-ES')}
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-400">Vistas</p>
+                <p className="text-white">{experience.contador_vistas}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-4">
+            <Button
+              variant="outline"
+              onClick={onClose}
+              disabled={loading || isProcessingImage}
+              className="flex-1 hover:bg-gray-800 text-white border-gray-600"
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={!descripcion.trim() || loading || isProcessingImage}
+              className="flex-1 bg-blue-600 hover:bg-blue-700"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  {selectedFile ? 'Actualizando...' : 'Guardando...'}
+                </>
+              ) : (
+                selectedFile ? 'Actualizar con nueva imagen' : 'Guardar Cambios'
+              )}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// Interfaces
+interface UploadData {
+  descripcion: string;
+  lugarId: string;
+  imageFile: File | null;
+  previewUrl: string | null;
+  nombreUsuario: string; // ✅ AGREGADO: Campo para nombre de usuario
+}
+
+interface PendingExperience {
+  imageFile: File;
+  descripcion: string;
+  lugarId?: string;
+  nombreUsuario?: string; // ✅ AGREGADO: Campo para nombre de usuario
+}
+
+export const ExperienceMural = () => {
+  const { 
+    experiences, 
+    myExperiences,
+    loading, 
+    uploading, 
+    editing,
+    deleting,
+    pagination,
+    loadingMore,
+    autoRefresh,
+    uploadExperienceWithValidation,
+    editExperience,
+    editExperienceWithImage,
+    deleteExperience,
+    fetchExperiences,
+    fetchMyExperiences,
+    incrementViewCount,
+    loadMoreExperiences,
+    startAutoRefresh,
+    stopAutoRefresh,
+  } = useExperiences();
+  
+  const { places } = usePlaces();
+  const { toast } = useToast();
+
+  const { 
+    modelo, 
+    cargando: cargandoModelo, 
+    errorModelo,
+    analizarImagen,
+    inicializarModelo 
+  } = useModeracionImagen();
+
+  const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [selectedExperience, setSelectedExperience] = useState<Experience | null>(null);
+  const [experienceToEdit, setExperienceToEdit] = useState<Experience | null>(null);
+  const [experienceToDelete, setExperienceToDelete] = useState<Experience | null>(null);
+  const [showTermsDialog, setShowTermsDialog] = useState(false);
+  const [activeTab, setActiveTab] = useState<'comunidad' | 'mis-experiencias'>('comunidad');
+  const [pendingExperience, setPendingExperience] = useState<PendingExperience | null>(null);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+
+  const [uploadData, setUploadData] = useState<UploadData>({
+    descripcion: '',
+    lugarId: '',
+    imageFile: null,
+    previewUrl: null,
+    nombreUsuario: '' // ✅ AGREGADO: Inicializar campo de nombre de usuario
+  });
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetchExperiences({ pagina: 1, limite: 6 });
+    fetchMyExperiences();
+    startAutoRefresh();
+    inicializarModelo();
+  }, [fetchExperiences, fetchMyExperiences, startAutoRefresh, inicializarModelo]);
+
+  useEffect(() => {
+    if (activeTab === 'comunidad') {
+      fetchExperiences({ pagina: 1, limite: 6 });
+    }
+  }, [activeTab, fetchExperiences]);
+
+  const handleAutoRefreshToggle = (enabled: boolean) => {
+    if (enabled) {
+      startAutoRefresh();
+    } else {
+      stopAutoRefresh();
+    }
+  };
+
+  const displayedExperiences = activeTab === 'comunidad' ? experiences : myExperiences;
+  const hasMoreExperiences = activeTab === 'comunidad' ? pagination?.tieneMas : false;
+
+  const handleFileSelect = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast({
+        title: 'Tipo de archivo inválido',
+        description: 'Por favor selecciona solo archivos de imagen.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      toast({
+        title: 'Archivo muy grande',
+        description: 'La imagen no debe superar los 5MB.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      setIsProcessingImage(true);
+      
+      const resultado = await analizarImagen(file);
+      
+      if (!resultado.esAprobado) {
+        toast({
+          title: '❌ Imagen rechazada',
+          description: resultado.razon || 'La imagen no cumple con los criterios de contenido apropiado.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      setUploadData(prev => ({
+        ...prev,
+        imageFile: file,
+        previewUrl: URL.createObjectURL(file)
+      }));
+
+    } catch (error) {
+      console.error('Error analizando imagen:', error);
+      setUploadData(prev => ({
+        ...prev,
+        imageFile: file,
+        previewUrl: URL.createObjectURL(file)
+      }));
+    } finally {
+      setIsProcessingImage(false);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -203,6 +761,26 @@ export const ExperienceMural = () => {
     e.preventDefault();
   };
 
+  const resetUploadForm = () => {
+    setUploadData({
+      descripcion: '',
+      lugarId: '',
+      imageFile: null,
+      previewUrl: null,
+      nombreUsuario: '' // ✅ AGREGADO: Resetear campo de nombre de usuario
+    });
+    setIsUploadOpen(false);
+    setIsProcessingImage(false);
+    
+    setTimeout(() => {
+      if (activeTab === 'comunidad') {
+        fetchExperiences({ pagina: 1, limite: 6 });
+      } else {
+        fetchMyExperiences();
+      }
+    }, 500);
+  };
+
   const handleUpload = async () => {
     if (!uploadData.imageFile || !uploadData.descripcion.trim()) {
       toast({
@@ -213,39 +791,115 @@ export const ExperienceMural = () => {
       return;
     }
 
-    try {
-      const success = await uploadExperience(
-        uploadData.imageFile,
-        uploadData.descripcion,
-        uploadData.lugarId || undefined
-      );
+    const result = await uploadExperienceWithValidation(
+      uploadData.imageFile,
+      uploadData.descripcion,
+      uploadData.lugarId || undefined,
+      uploadData.nombreUsuario // ✅ AGREGADO: Pasar nombre de usuario
+    );
 
+    if (result.success) {
+      resetUploadForm();
+    } else if (result.necesitaTerminos) {
+      setPendingExperience({
+        imageFile: uploadData.imageFile,
+        descripcion: uploadData.descripcion,
+        lugarId: uploadData.lugarId || undefined,
+        nombreUsuario: uploadData.nombreUsuario // ✅ AGREGADO: Pasar nombre de usuario
+      });
+      setShowTermsDialog(true);
+    }
+  };
+
+  const handleEdit = async (descripcion: string, nombreUsuario?: string) => {
+    if (!descripcion.trim()) {
+      toast({
+        title: 'Descripción requerida',
+        description: 'Por favor escribe una descripción.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (experienceToEdit) {
+      const success = await editExperience(experienceToEdit.id, descripcion, nombreUsuario);
       if (success) {
-        resetUploadForm();
-      }
-    } catch (err: any) {
-      if (err.message === 'TERMS_REQUIRED') {
-        setPendingExperience({
-          imageFile: uploadData.imageFile,
-          descripcion: uploadData.descripcion,
-          lugarId: uploadData.lugarId || undefined
+        setExperienceToEdit(null);
+        setIsEditOpen(false);
+        toast({
+          title: '✅ Experiencia actualizada',
+          description: 'Tu experiencia ha sido actualizada correctamente.',
+          variant: 'default',
         });
-        setShowTermsDialog(true);
       }
     }
+  };
+
+const handleEditWithImage = async (descripcion: string, imageFile: File | null, nombreUsuario?: string) => {
+  if (!descripcion.trim()) {
+    toast({
+      title: 'Descripción requerida',
+      description: 'Por favor escribe una descripción.',
+      variant: 'destructive',
+    });
+    return;
+  }
+
+  if (experienceToEdit) {
+    let success = false;
+    
+    // ✅ CORRECCIÓN: Pasar imageFile incluso si es null
+    success = await editExperienceWithImage(
+      experienceToEdit.id, 
+      descripcion, 
+      imageFile, // ✅ Esto puede ser File o null
+      nombreUsuario
+    );
+    
+    if (success) {
+      setExperienceToEdit(null);
+      setIsEditOpen(false);
+      toast({
+        title: '✅ Experiencia actualizada',
+        description: imageFile 
+          ? 'Tu experiencia e imagen han sido actualizadas correctamente.' 
+          : 'Tu experiencia ha sido actualizada correctamente.',
+        variant: 'default',
+      });
+    }
+  }
+};
+
+  const handleDelete = async () => {
+    if (experienceToDelete) {
+      const success = await deleteExperience(experienceToDelete.id);
+      if (success) {
+        setExperienceToDelete(null);
+      }
+    }
+  };
+
+  const openEditModal = (experience: Experience) => {
+    setExperienceToEdit(experience);
+    setIsEditOpen(true);
+  };
+
+  const openDeleteModal = (experience: Experience) => {
+    setExperienceToDelete(experience);
   };
 
   const handleTermsAccept = async () => {
     if (pendingExperience) {
       localStorage.setItem('experience_terms_accepted', 'true');
       
-      const success = await uploadExperience(
+      const result = await uploadExperienceWithValidation(
         pendingExperience.imageFile,
         pendingExperience.descripcion,
-        pendingExperience.lugarId
+        pendingExperience.lugarId,
+        pendingExperience.nombreUsuario // ✅ AGREGADO: Pasar nombre de usuario
       );
 
-      if (success) {
+      if (result.success) {
         resetUploadForm();
         setPendingExperience(null);
         setShowTermsDialog(false);
@@ -253,10 +907,17 @@ export const ExperienceMural = () => {
     }
   };
 
-  const handleExperienceClick = async (experience: any) => {
+  const handleExperienceClick = async (experience: Experience) => {
     setSelectedExperience(experience);
-    // Incrementar contador de vistas
-    await incrementViewCount(experience.id);
+    
+    try {
+      const result = await incrementViewCount(experience.id);
+      if (result.success) {
+        console.log('✅ Vista procesada para:', experience.id);
+      }
+    } catch (error) {
+      console.error('❌ Error al registrar vista:', error);
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -266,7 +927,6 @@ export const ExperienceMural = () => {
       day: 'numeric'
     });
   };
-
 
   if (loading && experiences.length === 0) {
     return (
@@ -290,8 +950,7 @@ export const ExperienceMural = () => {
     <>
       <section className="py-20 bg-gradient-to-br from-blue-50 via-green-50 to-emerald-50">
         <div className="container mx-auto px-4">
-          {/* Header */}
-          <div className="flex flex-col md:flex-row justify-between items-center mb-12 gap-4">
+          <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
             <div className="text-center md:text-left">
               <h2 className="text-4xl font-bold text-gray-900 mb-2">
                 Mural de <span className="text-blue-600">Experiencias</span>
@@ -301,27 +960,71 @@ export const ExperienceMural = () => {
               </p>
             </div>
             
-            <Button
-              onClick={() => setIsUploadOpen(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-2 px-6 py-3 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300"
-            >
-              <Plus className="w-5 h-5" />
-              Compartir Experiencia
-            </Button>
+            <div className="flex items-center gap-3">
+              <ModeloModeracionStatus 
+                modelo={!!modelo}
+                cargando={cargandoModelo}
+                errorModelo={errorModelo}
+              />
+              
+              <Button
+                onClick={() => setIsUploadOpen(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center gap-2 px-6 py-3 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300"
+              >
+                <Plus className="w-5 h-5" />
+                Compartir Experiencia
+              </Button>
+            </div>
           </div>
 
-          {/* Banner de invitación */}
-          <ExperienceInvitationBanner />
+          <AutoRefreshIndicator 
+            enabled={autoRefresh}
+            onToggle={handleAutoRefreshToggle}
+          />
 
-          {/* Grid de experiencias */}
-          {experiences.length === 0 ? (
+          <div className="flex border-b border-gray-200 mb-6">
+            <button
+              onClick={() => setActiveTab('comunidad')}
+              className={`px-4 py-2 font-medium text-lg transition-colors ${
+                activeTab === 'comunidad'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              👥 Comunidad
+            </button>
+            <button
+              onClick={() => setActiveTab('mis-experiencias')}
+              className={`px-4 py-2 font-medium text-lg transition-colors ${
+                activeTab === 'mis-experiencias'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              📱 Mis Experiencias
+            </button>
+          </div>
+
+          {activeTab === 'mis-experiencias' && (
+            <UserStatsBanner myExperiences={myExperiences} />
+          )}
+
+          {activeTab === 'comunidad' && <ExperienceInvitationBanner />}
+
+          {loading && displayedExperiences.length === 0 ? (
+            <ExperienceSkeletonGrid count={6} />
+          ) : displayedExperiences.length === 0 ? (
             <div className="text-center py-12">
               <ImageIcon className="w-16 h-16 text-gray-400 mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                Aún no hay experiencias
+                {activeTab === 'comunidad' 
+                  ? 'Aún no hay experiencias' 
+                  : 'Aún no has compartido experiencias'}
               </h3>
               <p className="text-gray-600 mb-6">
-                Sé el primero en compartir tu experiencia en San Juan Tahitic
+                {activeTab === 'comunidad'
+                  ? 'Sé el primero en compartir tu experiencia en San Juan Tahitic'
+                  : 'Comparte tu primera experiencia en San Juan Tahitic'}
               </p>
               <Button
                 onClick={() => setIsUploadOpen(true)}
@@ -331,136 +1034,223 @@ export const ExperienceMural = () => {
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              <AnimatePresence>
-                {experiences.map((experience, index) => (
-                  <motion.div
-                    key={experience.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.4, delay: index * 0.1 }}
-                    className="bg-white rounded-2xl overflow-hidden shadow-card hover:shadow-xl transition-all duration-300 cursor-pointer group"
-                    onClick={() => handleExperienceClick(experience)}
-                  >
-                    {/* Imagen */}
-                    <div className="relative overflow-hidden">
-                      <img
-                        src={experience.url_foto}
-                        alt={experience.descripcion}
-                        className="w-full h-64 object-cover group-hover:scale-105 transition-transform duration-500"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                      
-                      {/* Estado */}
-                      <div className="absolute top-3 left-3">
-                        <Badge className={cn(
-                          "text-white border-0",
-                          experience.estado === 'aprobado' ? 'bg-green-500' :
-                          experience.estado === 'pendiente' ? 'bg-yellow-500' :
-                          'bg-red-500'
-                        )}>
-                          {experience.estado === 'aprobado' ? <CheckCircle className="w-3 h-3 mr-1" /> :
-                           experience.estado === 'pendiente' ? <Clock className="w-3 h-3 mr-1" /> :
-                           <X className="w-3 h-3 mr-1" />}
-                          {experience.estado}
-                        </Badge>
-                      </div>
-                    </div>
-
-                    {/* Contenido */}
-                    <div className="p-4">
-                      <p className="text-gray-700 line-clamp-2 mb-3 leading-relaxed">
-                        {experience.descripcion}
-                      </p>
-                      
-                      <div className="flex items-center justify-between text-sm text-gray-500">
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-1">
-                            <Eye className="w-4 h-4" />
-                            <span>{experience.contador_vistas}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Calendar className="w-4 h-4" />
-                            <span>{formatDate(experience.creado_en)}</span>
-                          </div>
-                        </div>
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <AnimatePresence>
+                  {displayedExperiences.map((experience, index) => (
+                    <motion.div
+                      key={experience.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4, delay: index * 0.1 }}
+                      className="bg-white rounded-2xl overflow-hidden shadow-card hover:shadow-xl transition-all duration-300 group relative"
+                    >
+                      <div className="relative overflow-hidden">
+                        <img
+                          src={experience.url_foto}
+                          alt={experience.descripcion}
+                          className="w-full h-64 object-cover group-hover:scale-105 transition-transform duration-500 cursor-pointer"
+                          onClick={() => handleExperienceClick(experience)}
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" 
+                        onClick={() => handleExperienceClick(experience)}/>
                         
-                        {experience.lugar_nombre && (
-                          <div className="flex items-center gap-1 text-blue-600">
-                            <MapPin className="w-4 h-4" />
-                            <span className="truncate max-w-[100px]">
-                              {experience.lugar_nombre}
-                            </span>
+                        {activeTab === 'mis-experiencias' && (
+                          <div className="absolute top-3 right-3">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0 bg-black/60 hover:bg-black/80 text-white"
+                                >
+                                  <MoreVertical className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end"
+                                className="bg-white border border-gray-200 shadow-lg">
+                                <DropdownMenuItem 
+                                  onClick={() => openEditModal(experience)}
+                                  disabled={editing === experience.id}
+                                  className="focus:text-blue-600"
+                                >
+                                  <Edit className="w-4 h-4 mr-2" />
+                                  {editing === experience.id ? 'Editando...' : 'Editar'}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem 
+                                  onClick={() => openDeleteModal(experience)}
+                                  disabled={deleting === experience.id}
+                                  className="text-red-600 focus:text-red-600"
+                                >
+                                  <Trash2 className="w-4 h-4 mr-2" />
+                                  {deleting === experience.id ? 'Eliminando...' : 'Eliminar'}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         )}
                       </div>
-                    </div>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
+
+                      <div className="p-4">
+                        {/* ✅ AGREGADO: Mostrar nombre de usuario */}
+                        <div className="mb-3">
+                          <UserNameDisplay 
+                            nombreUsuario={experience.nombre_usuario}
+                          />
+                        </div>
+                        
+                        <p 
+                          className="text-gray-700 line-clamp-2 mb-3 leading-relaxed cursor-pointer"
+                          onClick={() => handleExperienceClick(experience)}
+                        >
+                          {experience.descripcion}
+                        </p>
+                        
+                        <div className="flex items-center justify-between text-sm text-gray-500">
+                          <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-1">
+                              <Eye className="w-4 h-4" />
+                              <span>{experience.contador_vistas} vistas</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Calendar className="w-4 h-4" />
+                              <span>{formatDate(experience.creado_en)}</span>
+                            </div>
+                          </div>
+                          
+                          {experience.lugar_nombre && (
+                            <div className="flex items-center gap-1 text-blue-600">
+                              <MapPin className="w-4 h-4" />
+                              <span className="truncate max-w-[100px]">
+                                {experience.lugar_nombre}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+
+              {activeTab === 'comunidad' && (
+                <LoadMoreButton 
+                  loading={loadingMore}
+                  hasMore={hasMoreExperiences}
+                  onClick={loadMoreExperiences}
+                />
+              )}
+            </>
           )}
         </div>
       </section>
 
-      {/* Modal de subida */}
+      {/* ✅ MODAL ACTUALIZADO: Con campo para nombre de usuario */}
       <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
-        <DialogContent className= "max-w-4xl max-h-[95vh] overflow-hidden bg-slate-900/95 backdrop-blur-sm border border-slate-700 shadow-xl text-white flex flex-col">
+        <DialogContent className="max-w-4xl max-h-[95vh] overflow-hidden bg-slate-900/95 backdrop-blur-sm border border-slate-700 shadow-xl text-white flex flex-col ">
           <DialogHeader>
             <DialogTitle className="text-center">Compartir Experiencia</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="text-white/70">
               Comparte tu foto y experiencia en San Juan Tahitic
             </DialogDescription>
           </DialogHeader>
           
-          <div className="space-y-4">
-            {/* Área de subida de imagen */}
-            <div
-              ref={dropRef}
-              onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-blue-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-400 transition-colors"
-            >
-              {uploadData.previewUrl ? (
-                <div className="relative">
-                  <img
-                    src={uploadData.previewUrl}
-                    alt="Vista previa"
-                    className="w-full h-40 object-cover rounded-md mx-auto"
-                  />
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setUploadData(prev => ({ ...prev, previewUrl: null, imageFile: null }));
-                    }}
-                    className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <UploadCloud className="w-12 h-12 text-blue-400 mx-auto mb-3" />
-                  <p className="text-blue-600 font-medium">Selecciona una imagen</p>
-                  <p className="text-sm text-white-500 mt-1">
-                    Arrastra y suelta o haz clic para seleccionar
-                  </p>
-                </>
-              )}
-              
-              <Input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                className="hidden"
-              />
+          <div className="space-y-4 bg-scroll overflow-y-auto px-6 pb-6 flex-1">
+            {/* ✅ AGREGADO: Campo para nombre de usuario */}
+            <div>
+              <label className="block text-sm font-medium text-white mb-2">
+                Tu nombre (opcional)
+              </label>
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-gray-400" />
+                <Input
+                  placeholder="Cómo quieres que te llamen (máx. 50 caracteres)"
+                  value={uploadData.nombreUsuario}
+                  onChange={(e) => setUploadData(prev => ({ ...prev, nombreUsuario: e.target.value }))}
+                  maxLength={50}
+                  className="bg-white/10 border-white/20 text-white placeholder-gray-400"
+                />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">
+                💡 Si dejas este campo vacío, se mostrará como "Usuario Anónimo"
+              </p>
             </div>
 
-            {/* Descripción */}
+            {/* Área de subida de imagen */}
             <div>
-              <label className="block text-sm font-medium text-white-700 mb-2">
+              <div className="flex items-center gap-2 mb-2">
+                <label className="block text-sm font-medium text-white">
+                  Imagen de la experiencia *
+                </label>
+                <ModeloModeracionStatus 
+                  modelo={!!modelo}
+                  cargando={cargandoModelo}
+                  errorModelo={errorModelo}
+                />
+              </div>
+              
+              <div
+                ref={dropRef}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onClick={() => !isProcessingImage && fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+                  isProcessingImage 
+                    ? 'border-yellow-400 bg-yellow-400/10 cursor-not-allowed' 
+                    : 'border-blue-300 hover:border-blue-400'
+                }`}
+              >
+                {isProcessingImage ? (
+                  <div className="flex flex-col items-center justify-center py-4">
+                    <Loader2 className="w-8 h-8 text-yellow-400 animate-spin mb-2" />
+                    <p className="text-yellow-400 font-medium">Analizando imagen...</p>
+                    <p className="text-sm text-yellow-300 mt-1">
+                      Verificando contenido apropiado
+                    </p>
+                  </div>
+                ) : uploadData.previewUrl ? (
+                  <div className="relative">
+                    <img
+                      src={uploadData.previewUrl}
+                      alt="Vista previa"
+                      className="w-full h-40 object-cover rounded-md mx-auto"
+                    />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setUploadData(prev => ({ ...prev, previewUrl: null, imageFile: null }));
+                      }}
+                      className="absolute -top-2 -right-2 p-1 bg-red-500 text-white rounded-full hover:bg-red-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <UploadCloud className="w-12 h-12 text-blue-400 mx-auto mb-3" />
+                    <p className="text-blue-400 font-medium">Selecciona una imagen</p>
+                    <p className="text-sm text-white/70 mt-1">
+                      Arrastra y suelta o haz clic para seleccionar
+                    </p>
+                    <p className="text-xs text-blue-300 mt-2">
+                      🔍 La imagen será analizada automáticamente
+                    </p>
+                  </>
+                )}
+                
+                <Input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  disabled={isProcessingImage}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-white mb-2">
                 Describe tu experiencia *
               </label>
               <Textarea
@@ -468,24 +1258,26 @@ export const ExperienceMural = () => {
                 value={uploadData.descripcion}
                 onChange={(e) => setUploadData(prev => ({ ...prev, descripcion: e.target.value }))}
                 rows={4}
-                className="resize-none"
+                className="resize-none bg-white/10 border-white/20 text-white placeholder-gray-400"
               />
+              <p className="text-xs text-gray-400 mt-1">
+                💡 El texto será validado automáticamente al compartir
+              </p>
             </div>
 
             {/* Lugar relacionado (opcional) */}
             <div>
-              <label className="block text-sm font-medium text-white-700 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Lugar relacionado (opcional)
               </label>
               <select
                 value={uploadData.lugarId}
                 onChange={(e) => setUploadData(prev => ({ ...prev, lugarId: e.target.value }))}
-                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black"
+                className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-black bg-white"
               >
-                <option value="" >Selecciona un lugar</option>
+                <option value="">Selecciona un lugar</option>
                 {places.map(place => (
-                  <option key={place.id} value={place.id}
-                  className='text-black'>
+                  <option key={place.id} value={place.id}>
                     {place.nombre}
                   </option>
                 ))}
@@ -497,26 +1289,28 @@ export const ExperienceMural = () => {
               <Button
                 variant="outline"
                 onClick={resetUploadForm}
-                className="flex-1 hover:bg-red-900 text-white"
+                disabled={isProcessingImage}
+                className="flex-1 hover:bg-red-900 text-white border-white/30"
               >
                 Cancelar
               </Button>
               <Button
                 onClick={handleUpload}
-                disabled={!uploadData.imageFile || !uploadData.descripcion.trim() || uploading}
+                disabled={!uploadData.imageFile || !uploadData.descripcion.trim() || uploading || isProcessingImage}
                 className="flex-1 bg-blue-600 hover:bg-blue-700"
               >
-                {uploading ? (
+                {isProcessingImage ? (
                   <>
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                      className="w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"
-                    />
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Analizando...
+                  </>
+                ) : uploading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
                     Subiendo...
                   </>
                 ) : (
-                  'Compartir'
+                  'Compartir Experiencia'
                 )}
               </Button>
             </div>
@@ -524,110 +1318,106 @@ export const ExperienceMural = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Modal de experiencia seleccionada */}
-      <AnimatePresence>
-        {selectedExperience && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
-            onClick={() => setSelectedExperience(null)}
-          >
-            <motion.div
-              initial={{ scale: 0.9 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0.9 }}
-              className="relative max-w-4xl max-h-full bg-white rounded-2xl overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Botón cerrar */}
-              <button
-                onClick={() => setSelectedExperience(null)}
-                className="absolute top-4 right-4 z-10 p-2 bg-black/60 text-white rounded-full hover:bg-black/80 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
+      {/* Modal de edición ACTUALIZADO */}
+      <ExperienceEditModal
+        experience={experienceToEdit}
+        isOpen={isEditOpen}
+        onClose={() => {
+          setExperienceToEdit(null);
+          setIsEditOpen(false);
+        }}
+        onSave={handleEdit}
+        onSaveWithImage={handleEditWithImage}
+        loading={editing === experienceToEdit?.id}
+        modelo={!!modelo}
+        cargandoModelo={cargandoModelo}
+        errorModelo={errorModelo}
+        analizarImagen={analizarImagen}
+      />
 
-              {/* Contenido */}
-              <div className="flex flex-col md:flex-row h-full">
-                {/* Imagen */}
-                <div className="md:w-1/2">
-                  <img
-                    src={selectedExperience.url_foto}
-                    alt={selectedExperience.descripcion}
-                    className="w-full h-64 md:h-full object-cover"
-                  />
-                </div>
-
-                {/* Información */}
-                <div className="md:w-1/2 p-6 flex flex-col">
-                  <div className="flex-1">
-                    {/* Estado */}
-                    <Badge className={cn(
-                      "mb-4",
-                      selectedExperience.estado === 'aprobado' ? 'bg-green-100 text-green-800' :
-                      selectedExperience.estado === 'pendiente' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-red-100 text-red-800'
-                    )}>
-                      {selectedExperience.estado}
-                    </Badge>
-
-                    {/* Descripción */}
-                    <p className="text-gray-700 text-lg leading-relaxed mb-6">
-                      {selectedExperience.descripcion}
-                    </p>
-
-                    {/* Metadatos */}
-                    <div className="space-y-3 text-sm text-gray-600">
-                      {selectedExperience.lugar_nombre && (
-                        <div className="flex items-center gap-2">
-                          <MapPin className="w-4 h-4" />
-                          <span>{selectedExperience.lugar_nombre}</span>
-                        </div>
-                      )}
-                      
-                      <div className="flex items-center gap-2">
-                        <Calendar className="w-4 h-4" />
-                        <span>Publicado el {formatDate(selectedExperience.creado_en)}</span>
-                      </div>
-                      
-                      <div className="flex items-center gap-2">
-                        <Eye className="w-4 h-4" />
-                        <span>{selectedExperience.contador_vistas} vistas</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Acciones */}
-                  <div className="flex gap-3 pt-6 border-t border-gray-200">
-                    <Button variant="outline" className="flex-1">
-                      <Heart className="w-4 h-4 mr-2" />
-                      Me gusta
-                    </Button>
-                    <Button variant="outline" className="flex-1">
-                      <MessageCircle className="w-4 h-4 mr-2" />
-                      Comentar
-                    </Button>
-                  </div>
+      {/* Modal de confirmación de eliminación */}
+      <Dialog open={!!experienceToDelete} onOpenChange={() => setExperienceToDelete(null)}>
+        <DialogContent className="max-w-md overflow-hidden bg-slate-900/95 backdrop-blur-sm border border-slate-700 shadow-xl text-white flex flex-col">
+          <DialogHeader>
+            <DialogTitle>¿Eliminar Experiencia?</DialogTitle>
+            <DialogDescription>
+              Esta acción no se puede deshacer. La experiencia será eliminada permanentemente.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {experienceToDelete && (
+            <div className="space-y-4">
+              <div className="flex gap-4 items-start">
+                <img
+                  src={experienceToDelete.url_foto}
+                  alt="Experiencia"
+                  className="w-20 h-20 object-cover rounded-lg"
+                />
+                <div>
+                  <p className="text-sm text-gray-700 line-clamp-3">
+                    {experienceToDelete.descripcion}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Publicado el {formatDate(experienceToDelete.creado_en)}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {experienceToDelete.contador_vistas} vistas
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Por: {experienceToDelete.nombre_usuario || 'Usuario Anónimo'}
+                  </p>
                 </div>
               </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+
+              <div className="flex gap-3 pt-4">
+                <Button
+                  variant="outline"
+                  onClick={() => setExperienceToDelete(null)}
+                  className="flex-1 hover:bg-gray-800 text-white border-gray-600"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={handleDelete}
+                  disabled={deleting === experienceToDelete.id}
+                  variant="destructive"
+                  className="flex-1 bg-red-600 hover:bg-red-700"
+                >
+                  {deleting === experienceToDelete.id ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                      Eliminando...
+                    </>
+                  ) : (
+                    'Eliminar'
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de imagen de experiencia */}
+      <ExperienceImageModal
+        experience={selectedExperience}
+        isOpen={!!selectedExperience}
+        onClose={() => setSelectedExperience(null)}
+      />
 
       {/* Diálogo de términos y condiciones */}
       <TermsAndConditionsDialog
-              isOpen={showTermsDialog}
-              onClose={() => {
-                  setShowTermsDialog(false);
-                  setPendingExperience(null);
-              } }
-              onAccept={handleTermsAccept}
-              type="experience"
-              title="Términos para Compartir Experiencias"
-              description="Al compartir tu experiencia, aceptas nuestros términos de uso y política de privacidad." placeName={''}      />
+        isOpen={showTermsDialog}
+        onClose={() => {
+          setShowTermsDialog(false);
+          setPendingExperience(null);
+        }}
+        onAccept={handleTermsAccept}
+        type="experience"
+        title="Términos para Compartir Experiencias"
+        description="Al compartir tu experiencia, aceptas nuestros términos de uso y política de privacidad."
+        placeName={''}
+      />
     </>
   );
 };

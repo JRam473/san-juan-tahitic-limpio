@@ -122,7 +122,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     
     localStorage.setItem('pre_login_path', pathToSave);
     
-    const googleAuthUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/api/auth/google?state=${encodeURIComponent(pathToSave)}`;
+    const googleAuthUrl = `${import.meta.env.VITE_API_URL}/api/auth/google?state=${encodeURIComponent(pathToSave)}`;
     console.log('🔗 Redirigiendo a Google OAuth con estado:', googleAuthUrl);
     
     window.location.href = googleAuthUrl;

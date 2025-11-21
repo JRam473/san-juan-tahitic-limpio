@@ -75,7 +75,7 @@ const navigationOptions: QuickReply[] = [
 ];
 
 // Configuración del backend
-const BACKEND_URL = import.meta.env.VITE_CHATBOT_API_URL || "http://localhost:5000";
+const BACKEND_URL = import.meta.env.VITE_API_URL;
 // Agrega esto temporalmente en CustomChatBot.tsx para debug
 export const CustomChatbot: React.FC<CustomChatbotProps> = ({ onNavigate }) => {
   const [isOpen, setIsOpen] = useState(false);
